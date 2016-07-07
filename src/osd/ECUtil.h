@@ -106,12 +106,15 @@ int encode(
 class HashInfo {
   uint64_t total_chunk_size;
   vector<uint32_t> cumulative_shard_hashes;
+   mutable map<int, vector<uint32_t>> cumulative_stripelet_hashes;  // Map of shards and the crc of stripelets of that corresponding shard
 public:
   HashInfo() : total_chunk_size(0) {}
   explicit HashInfo(unsigned num_chunks)
   : total_chunk_size(0),
     cumulative_shard_hashes(num_chunks, -1) {}
   void append(uint64_t old_size, map<int, bufferlist> &to_append);
+  void append_stripelet_crc(uint64_t old_size, map<int, bufferlist> &to_append,
+                                uint32_t stripewidth,int datachunk_count);
   void clear() {
     total_chunk_size = 0;
     cumulative_shard_hashes = vector<uint32_t>(
@@ -126,6 +129,7 @@ public:
     assert((unsigned)shard < cumulative_shard_hashes.size());
     return cumulative_shard_hashes[shard];
   }
+   bool verify_stripelet_crc(int shard, bufferlist bl, int stripelet_size);
   uint64_t get_total_chunk_size() const {
     return total_chunk_size;
   }

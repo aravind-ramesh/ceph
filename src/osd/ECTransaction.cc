@@ -145,15 +145,24 @@ struct TransGenerator : public boost::static_visitor<void> {
     assert(bl.length() - op.bl.length() < sinfo.get_stripe_width());
     int r = ECUtil::encode(
       sinfo, ecimpl, bl, want, &buffers);
-
-    hinfo->append(
-      sinfo.aligned_logical_offset_to_chunk_offset(op.off),
-      buffers);
     bufferlist hbuf;
-    ::encode(
-      *hinfo,
-      hbuf);
-
+    if (g_conf->osd_ec_verify_stripelet_crc) {
+        hinfo->append_stripelet_crc(
+          sinfo.aligned_logical_offset_to_chunk_offset(op.off),
+          buffers,
+          sinfo.get_stripe_width(),
+          ecimpl->get_data_chunk_count());
+        ::encode(
+          *hinfo,
+          hbuf);
+    } else {
+        hinfo->append(
+          sinfo.aligned_logical_offset_to_chunk_offset(op.off),
+          buffers);
+        ::encode(
+          *hinfo,
+          hbuf);
+        }
     assert(r == 0);
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();

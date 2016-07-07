@@ -950,6 +950,14 @@ void ECBackend::handle_sub_read(
 	  goto error;
 	}
       }
+      if (g_conf->osd_ec_verify_stripelet_crc) {
+          int stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+          if (!hinfo->verify_stripelet_crc(shard, bl, stripelet_size)) {
+              r = -EIO;
+              goto error;
+          }
+      }
+
     }
     continue;
 error:
@@ -2064,8 +2072,8 @@ void ECBackend::be_deep_scrub(
 
   uint32_t fadvise_flags = CEPH_OSD_OP_FLAG_FADVISE_SEQUENTIAL | CEPH_OSD_OP_FLAG_FADVISE_DONTNEED;
 
+  bufferlist bl;
   while (true) {
-    bufferlist bl;
     handle.reset_tp_timeout();
     r = store->read(
       ch,
@@ -2105,7 +2113,14 @@ void ECBackend::be_deep_scrub(
       o.read_error = true;
       return;
     }
-
+  if (g_conf->osd_ec_verify_stripelet_crc) {
+      int stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+      if (!hinfo->verify_stripelet_crc(get_parent()->whoami_shard().shard, bl, stripelet_size)) {
+        dout(0) << "_scan_list  " << poid << " got incorrect hash on read" << dendl;
+        o.read_error = true;
+        return;
+      }
+    }
     if (hinfo->get_total_chunk_size() != pos) {
       dout(0) << "_scan_list  " << poid << " got incorrect size on read" << dendl;
       o.read_error = true;
