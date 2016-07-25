@@ -158,8 +158,34 @@ void ECUtil::HashInfo::append(uint64_t old_size,
     uint32_t new_hash = i->second.crc32c(cumulative_shard_hashes[i->first]);
     cumulative_shard_hashes[i->first] = new_hash;
   }
-  total_chunk_size += size_to_append;
 }
+
+void ECUtil::HashInfo::append_shard_stripelet_crc(uint64_t old_size,
+                                        map<int, bufferlist> &to_append,
+                                        uint32_t stripelet_size,
+                                        int shard) {
+  dout(1) << __func__ << " append size: " << to_append.size() << "shard = " << shard << "Stored shardid " << shard_id << dendl; //Arav
+  dout (1) << "old_size: " << old_size << " total_chunk_size " << total_chunk_size << dendl;
+  map<int, bufferlist>::iterator i = to_append.find(shard);
+  assert(i != to_append.end()); // Hit the end of map, Could not find the expected shard-id, Assert.
+  uint64_t size_to_append = i->second.length();
+  assert(size_to_append == i->second.length());
+  full_shard_hash = i->second.crc32c(full_shard_hash);
+  uint32_t p = 0;
+  vector<uint32_t> stripelet_crc(i->second.length()/stripelet_size, -1);
+  for (uint32_t j = 0; j < i->second.length(); j += stripelet_size) {
+    bufferlist buf;
+    buf.substr_of(i->second, j, stripelet_size);
+    uint32_t new_hash = buf.crc32c(-1);
+    stripelet_crc[p++] = new_hash;
+  }
+  dout(1) << "stripelet_crc vector size = " << stripelet_crc.size() << dendl;
+  cumulative_shard_stripelet_hashes.insert(cumulative_shard_stripelet_hashes.end(), stripelet_crc.begin(), stripelet_crc.end());
+  dout(1) << "cumulative_shard_stripelet_hashes vector size = " << cumulative_shard_stripelet_hashes.size() << dendl;
+  total_chunk_size += size_to_append;
+  shard_id = shard;
+}
+/*
 void ECUtil::HashInfo::append_stripelet_crc(uint64_t old_size,
                                         map<int, bufferlist> &to_append,
                                         uint32_t stripewidth,
@@ -188,7 +214,7 @@ void ECUtil::HashInfo::append_stripelet_crc(uint64_t old_size,
   }
   total_chunk_size += size_to_append;
 }
-
+*/
 bool ECUtil::HashInfo::verify_stripelet_crc(int shard, bufferlist bl, int stripelet_size)
 {
   dout(15) << __func__ << dendl;
@@ -197,17 +223,16 @@ bool ECUtil::HashInfo::verify_stripelet_crc(int shard, bufferlist bl, int stripe
        bufferlist buf;
        buf.substr_of(bl, j, stripelet_size);
        uint32_t new_hash = buf.crc32c(-1);
-       if (new_hash != cumulative_stripelet_hashes[shard][i]) {
+       if (new_hash != cumulative_shard_stripelet_hashes[i]) {
           // CRC mismatch for this stripelet, return false
-          dout(1) << "CRC Mismatch for shard " << shard << "Calculated crc = " << buf.crc32c(-1) << "Expected crc = " << cumulative_stripelet_hashes[shard][i] << dendl;
+          dout(1) << "CRC Mismatch for shard " << shard << "Calculated crc = " << buf.crc32c(-1) << "Expected crc = " << cumulative_shard_stripelet_hashes[i] << dendl;
           return false;
        }
-          dout(20) << "Calculated crc = " << buf.crc32c(-1) << " Expected crc =" << cumulative_stripelet_hashes[shard][i] << dendl;
+          dout(20) << "Calculated crc = " << buf.crc32c(-1) << " Expected crc =" << cumulative_shard_stripelet_hashes[i] << dendl;
   }
-
   return true;
 }
-
+/*
 void ECUtil::HashInfo::encode(bufferlist &bl) const
 {
   ENCODE_START(1, 1, bl);
@@ -238,6 +263,31 @@ void ECUtil::HashInfo::decode(bufferlist::iterator &bl)
   }
   ::decode(cumulative_shard_hashes, bl);
   DECODE_FINISH(bl);
+}
+*/
+
+void ECUtil::HashInfo::encode(bufferlist &bl) const
+{
+  dout(1) << __func__ << " DBG encode: shard = " << shard_id << " fsh- " << full_shard_hash  << " total_chunk_size = " << total_chunk_size << dendl;
+  ENCODE_START(1, 1, bl);
+  ::encode(total_chunk_size, bl);
+  ::encode(cumulative_shard_hashes, bl);
+  ::encode(cumulative_shard_stripelet_hashes, bl);
+  ::encode(full_shard_hash, bl);
+  ::encode(shard_id, bl);
+  ENCODE_FINISH(bl);
+}
+
+void ECUtil::HashInfo::decode(bufferlist::iterator &bl)
+{
+  DECODE_START(1, bl);
+  ::decode(total_chunk_size, bl);
+  ::decode(cumulative_shard_hashes, bl);
+  ::decode(cumulative_shard_stripelet_hashes, bl);
+  ::decode(full_shard_hash, bl);
+  ::decode(shard_id, bl);
+  DECODE_FINISH(bl);
+  dout(1) << __func__ << " DBG decode: shard = " << shard_id << " fsh- " << full_shard_hash << " total_chunk_size = " << total_chunk_size << dendl;
 }
 
 void ECUtil::HashInfo::dump(Formatter *f) const

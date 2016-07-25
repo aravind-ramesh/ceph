@@ -115,7 +115,8 @@ struct TransGenerator : public boost::static_visitor<void> {
       /* No change, but write it out anyway in case the object did not
        * previously exist. */
       assert(hash_infos.count(op.oid));
-      ECUtil::HashInfoRef hinfo = hash_infos[op.oid];
+      //ECUtil::HashInfoRef hinfo = hash_infos[op.oid];
+      ECUtil::HashInfo *hinfo = &((*(hash_infos[op.oid]))[i->first]);
       bufferlist hbuf;
       ::encode(
 	*hinfo,
@@ -135,7 +136,7 @@ struct TransGenerator : public boost::static_visitor<void> {
     map<int, bufferlist> buffers;
 
     assert(hash_infos.count(op.oid));
-    ECUtil::HashInfoRef hinfo = hash_infos[op.oid];
+    //ECUtil::HashInfoRef hinfo = hash_infos[op.oid];
 
     // align
     if (bl.length() % sinfo.get_stripe_width())
@@ -145,28 +146,11 @@ struct TransGenerator : public boost::static_visitor<void> {
     assert(bl.length() - op.bl.length() < sinfo.get_stripe_width());
     int r = ECUtil::encode(
       sinfo, ecimpl, bl, want, &buffers);
-    bufferlist hbuf;
-    if (g_conf->osd_ec_verify_stripelet_crc) {
-        hinfo->append_stripelet_crc(
-          sinfo.aligned_logical_offset_to_chunk_offset(op.off),
-          buffers,
-          sinfo.get_stripe_width(),
-          ecimpl->get_data_chunk_count());
-        ::encode(
-          *hinfo,
-          hbuf);
-    } else {
-        hinfo->append(
-          sinfo.aligned_logical_offset_to_chunk_offset(op.off),
-          buffers);
-        ::encode(
-          *hinfo,
-          hbuf);
-        }
     assert(r == 0);
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
+      ECUtil::HashInfo *hinfo = &((*(hash_infos[op.oid]))[i->first]);
       assert(buffers.count(i->first));
       bufferlist &enc_bl = buffers[i->first];
       i->second.set_alloc_hint(
@@ -183,6 +167,19 @@ struct TransGenerator : public boost::static_visitor<void> {
 	enc_bl.length(),
 	enc_bl,
 	op.fadvise_flags);
+      if (g_conf->osd_ec_verify_stripelet_crc) {
+         hinfo->append_shard_stripelet_crc(
+           sinfo.aligned_logical_offset_to_chunk_offset(op.off),
+           buffers,
+           sinfo.get_stripe_width()/ecimpl->get_data_chunk_count(),
+           (int)i->first);
+      } else {
+        hinfo->append(
+          sinfo.aligned_logical_offset_to_chunk_offset(op.off),
+          buffers);
+      }
+      bufferlist hbuf;
+      ::encode(*hinfo, hbuf);
       i->second.setattr(
 	get_coll_ct(i->first, op.oid),
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
@@ -207,10 +204,11 @@ struct TransGenerator : public boost::static_visitor<void> {
     assert(hash_infos.count(op.source));
     assert(hash_infos.count(op.destination));
     *(hash_infos[op.destination]) = *(hash_infos[op.source]);
-    hash_infos[op.source]->clear();
+    //hash_infos[op.source]->clear();
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
+      (*(hash_infos[op.source]))[i->first].clear();
       i->second.collection_move_rename(
 	get_coll_rm(i->first, op.source),
 	ghobject_t(op.source, ghobject_t::NO_GEN, i->first),
@@ -220,10 +218,11 @@ struct TransGenerator : public boost::static_visitor<void> {
   }
   void operator()(const ECTransaction::StashOp &op) {
     assert(hash_infos.count(op.oid));
-    hash_infos[op.oid]->clear();
+    //hash_infos[op.oid]->clear();
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
+      (*(hash_infos[op.oid]))[i->first].clear();
       coll_t cid(get_coll_rm(i->first, op.oid));
       i->second.collection_move_rename(
 	cid,
@@ -234,10 +233,11 @@ struct TransGenerator : public boost::static_visitor<void> {
   }
   void operator()(const ECTransaction::RemoveOp &op) {
     assert(hash_infos.count(op.oid));
-    hash_infos[op.oid]->clear();
+    //hash_infos[op.oid]->clear();
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
+      (*(hash_infos[op.oid]))[i->first].clear();
       i->second.remove(
 	get_coll_rm(i->first, op.oid),
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first));

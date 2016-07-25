@@ -390,13 +390,15 @@ void ECBackend::handle_recovery_read_complete(
       op.recovery_info.oi = op.obc->obs.oi;
     }
 
+    vector<ECUtil::HashInfo> hinfo_v(ec_impl->get_chunk_count());
     ECUtil::HashInfo hinfo(ec_impl->get_chunk_count());
     if (op.obc->obs.oi.size > 0) {
       assert(op.xattrs.count(ECUtil::get_hinfo_key()));
       bufferlist::iterator bp = op.xattrs[ECUtil::get_hinfo_key()].begin();
       ::decode(hinfo, bp);
+      hinfo_v[get_parent()->whoami_shard().shard] = hinfo;
     }
-    op.hinfo = unstable_hashinfo_registry.lookup_or_create(hoid, hinfo);
+    op.hinfo = unstable_hashinfo_registry.lookup_or_create(hoid, hinfo_v);
   }
   assert(op.xattrs.size());
   assert(op.obc);
@@ -898,7 +900,9 @@ void ECBackend::handle_sub_read(
       i != op.to_read.end();
       ++i) {
     int r = 0;
-    ECUtil::HashInfoRef hinfo = get_hash_info(i->first);
+
+    ECUtil::HashInfoRef hinfo_v = get_hash_info(i->first);
+    ECUtil::HashInfo *hinfo = &((*hinfo_v)[shard]);
     if (!hinfo) {
       r = -EIO;
       get_parent()->clog_error() << __func__ << ": No hinfo for " << i->first << "\n";
@@ -936,7 +940,7 @@ void ECBackend::handle_sub_read(
       // are read in sections, so the digest check here won't be done here.
       // Do NOT check osd_read_eio_on_bad_digest here.  We need to report
       // the state of our chunk in case other chunks could substitute.
-      if ((bl.length() == hinfo->get_total_chunk_size()) &&
+      /* if ((bl.length() == hinfo->get_total_chunk_size()) && // TODO: to be handled
 	  (j->get<0>() == 0)) {
 	dout(20) << __func__ << ": Checking hash of " << i->first << dendl;
 	bufferhash h(-1);
@@ -949,7 +953,7 @@ void ECBackend::handle_sub_read(
 	  r = -EIO;
 	  goto error;
 	}
-      }
+      } */
       if (g_conf->osd_ec_verify_stripelet_crc) {
           int stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
           if (!hinfo->verify_stripelet_crc(shard, bl, stripelet_size)) {
@@ -1413,7 +1417,9 @@ void ECBackend::submit_transaction(
       ObjectModDesc desc;
       map<string, boost::optional<bufferlist> > old_attrs;
       bufferlist old_hinfo;
-      ::encode(*(op->unstable_hash_infos[i->soid]), old_hinfo);
+      //::encode(*(op->unstable_hash_infos[i->soid]), old_hinfo);
+      ECUtil::HashInfo *hinfo = &((*(op->unstable_hash_infos[i->soid]))[get_parent()->whoami_shard().shard]);
+      ::encode(*hinfo, old_hinfo);
       old_attrs[ECUtil::get_hinfo_key()] = old_hinfo;
       desc.setattrs(old_attrs);
       i->mod_desc.swap(desc);
@@ -1713,10 +1719,13 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
       ch,
       ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
       &st);
-    ECUtil::HashInfo hinfo(ec_impl->get_chunk_count());
+    // Vector of hinfos with number of elements = chunk count and each element initialized to chunk_count
+    vector<ECUtil::HashInfo> hinfo_v(ec_impl->get_chunk_count());
+    //ECUtil::HashInfo hinfo(ec_impl->get_chunk_count());
     // XXX: What does it mean if there is no object on disk?
     if (r >= 0) {
       dout(10) << __func__ << ": found on disk, size " << st.st_size << dendl;
+      ECUtil::HashInfo hinfo(ec_impl->get_chunk_count());
       bufferlist bl;
       if (attrs) {
 	map<string, bufferptr>::const_iterator k = attrs->find(ECUtil::get_hinfo_key());
@@ -1739,16 +1748,17 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
       if (bl.length() > 0) {
 	bufferlist::iterator bp = bl.begin();
 	::decode(hinfo, bp);
-	if (checks && hinfo.get_total_chunk_size() != (uint64_t)st.st_size) {
+	hinfo_v[get_parent()->whoami_shard().shard] = hinfo;
+	/*if (checks && hinfo.get_total_chunk_size() != (uint64_t)st.st_size) {
 	  dout(0) << __func__ << ": Mismatch of total_chunk_size "
 			       << hinfo.get_total_chunk_size() << dendl;
 	  return ECUtil::HashInfoRef();
-	}
+	}*/ // May not be needed
       } else if (st.st_size > 0) { // If empty object and no hinfo, create it
 	return ECUtil::HashInfoRef();
       }
     }
-    ref = unstable_hashinfo_registry.lookup_or_create(hoid, hinfo);
+    ref = unstable_hashinfo_registry.lookup_or_create(hoid, hinfo_v);
   }
   return ref;
 }
@@ -2101,7 +2111,8 @@ void ECBackend::be_deep_scrub(
     return;
   }
 
-  ECUtil::HashInfoRef hinfo = get_hash_info(poid, false, &o.attrs);
+  ECUtil::HashInfoRef hinfo_v = get_hash_info(poid, false, &o.attrs);
+  ECUtil::HashInfo *hinfo = &((*hinfo_v)[get_parent()->whoami_shard().shard]);
   if (!hinfo) {
     dout(0) << "_scan_list  " << poid << " could not retrieve hash info" << dendl;
     o.read_error = true;
@@ -2121,11 +2132,11 @@ void ECBackend::be_deep_scrub(
         return;
       }
     }
-    if (hinfo->get_total_chunk_size() != pos) {
+    /*if (hinfo->get_total_chunk_size() != pos) {
       dout(0) << "_scan_list  " << poid << " got incorrect size on read" << dendl;
       o.read_error = true;
-      return;
-    }
+      return; //May not be needed
+    } */
 
     /* We checked above that we match our own stored hash.  We cannot
      * send a hash of the actual object, so instead we simply send

@@ -106,15 +106,25 @@ int encode(
 class HashInfo {
   uint64_t total_chunk_size;
   vector<uint32_t> cumulative_shard_hashes;
-   mutable map<int, vector<uint32_t>> cumulative_stripelet_hashes;  // Map of shards and the crc of stripelets of that corresponding shard
+  //mutable map<int, vector<uint32_t>> cumulative_stripelet_hashes;
+  vector<uint32_t> cumulative_shard_stripelet_hashes;
+  int shard_id;
+  uint32_t full_shard_hash;
 public:
-  HashInfo() : total_chunk_size(0) {}
+  HashInfo() : total_chunk_size(0),
+	       shard_id(-1),
+	       full_shard_hash(-1) {}
   explicit HashInfo(unsigned num_chunks)
   : total_chunk_size(0),
-    cumulative_shard_hashes(num_chunks, -1) {}
+    cumulative_shard_hashes(num_chunks, -1),
+    shard_id(-1),
+    full_shard_hash(-1) {}
   void append(uint64_t old_size, map<int, bufferlist> &to_append);
-  void append_stripelet_crc(uint64_t old_size, map<int, bufferlist> &to_append,
-                                uint32_t stripewidth,int datachunk_count);
+  //void append_stripelet_crc(uint64_t old_size, map<int, bufferlist> &to_append,
+  //                              uint32_t stripewidth,int datachunk_count);
+
+  void append_shard_stripelet_crc(uint64_t old_size, map<int, bufferlist> &to_append,
+				  uint32_t stripelet_size, int shard);
   void clear() {
     total_chunk_size = 0;
     cumulative_shard_hashes = vector<uint32_t>(
@@ -126,15 +136,17 @@ public:
   void dump(Formatter *f) const;
   static void generate_test_instances(list<HashInfo*>& o);
   uint32_t get_chunk_hash(int shard) const {
-    assert((unsigned)shard < cumulative_shard_hashes.size());
-    return cumulative_shard_hashes[shard];
+    // assert((unsigned)shard < cumulative_shard_hashes.size());
+    // return cumulative_shard_hashes[shard];
+    assert(shard == shard_id);
+    return full_shard_hash;
   }
    bool verify_stripelet_crc(int shard, bufferlist bl, int stripelet_size);
   uint64_t get_total_chunk_size() const {
     return total_chunk_size;
   }
 };
-typedef ceph::shared_ptr<HashInfo> HashInfoRef;
+typedef ceph::shared_ptr<vector<HashInfo>> HashInfoRef;
 
 bool is_hinfo_key_string(const string &key);
 const string &get_hinfo_key();
