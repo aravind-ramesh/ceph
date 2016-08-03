@@ -368,6 +368,7 @@ public:
     set<pg_shard_t> pending_apply;
 
     map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> unstable_hash_infos;
+    map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> unstable_crc_info_diffs; //Arav
     ~Op() {
       delete on_local_applied_sync;
       delete on_all_applied;
@@ -456,6 +457,14 @@ public:
   /// If modified, ensure that the ref is held until the update is applied
   SharedPtrRegistry<hobject_t, ECUtil::HashInfo, hobject_t::BitwiseComparator> unstable_hashinfo_registry;
   ECUtil::HashInfoRef get_hash_info(const hobject_t &hoid, bool checks = true,
+				    const map<string,bufferptr> *attr = NULL);
+//Arav
+  SharedPtrRegistry<hobject_t, ECUtil::CrcInfo, hobject_t::BitwiseComparator> unstable_crcinfo_registry;
+  ECUtil::CrcInfoRef get_crc_info(const hobject_t &hoid, bool checks = true,
+				    const map<string,bufferptr> *attr = NULL);
+
+  SharedPtrRegistry<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> unstable_crc_info_diffs_registry;
+  ECUtil::CrcInfoDiffsRef get_crc_info_diffs_from_registry(const hobject_t &hoid, bool checks = true,
 				    const map<string,bufferptr> *attr = NULL);
 
   friend struct ReadCB;

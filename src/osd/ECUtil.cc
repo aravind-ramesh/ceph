@@ -3,6 +3,15 @@
 #include <errno.h>
 #include "include/encoding.h"
 #include "ECUtil.h"
+#include "ECTransaction.h"
+
+#define dout_subsys ceph_subsys_osd
+#undef dout_prefix
+#define dout_prefix _prefix(_dout)
+static ostream& _prefix(std::ostream *_dout)
+{
+  return *_dout << "ECUtil:";
+}
 
 int ECUtil::decode(
   const stripe_info_t &sinfo,
@@ -208,4 +217,94 @@ bool ECUtil::is_hinfo_key_string(const string &key)
 const string &ECUtil::get_hinfo_key()
 {
   return HINFO_KEY;
+}
+
+//Arav
+void ECUtil::CrcInfoDiffs::append_crc(uint64_t old_size,
+				      map<int, bufferlist> &to_append,
+				      uint32_t shard,
+				      uint32_t stripelet_size)
+{
+// Calculate stripelet crc for given data buffer.
+// Check for any exisiting diff(one set of striplet crc), 
+// if found, create a new diff and update the vector crc_diffs
+// if not found, update the vector(push_back)
+
+  dout(1) << __func__ << " DBG: append size: " << to_append.size() << "shard = " << shard << dendl;
+  dout(1) << __func__ << " DBG: old_size " << old_size << " stripelet_size: " << stripelet_size << dendl; 
+  map<int, bufferlist>::iterator i = to_append.find(shard);
+  assert(i != to_append.end()); // Hit the end of map, Could not find the expected shard-id, Assert.
+  uint32_t p = 0;
+  vector<uint32_t> s_crc(i->second.length()/stripelet_size, -1);
+  for (uint32_t j = 0; j < i->second.length(); j += stripelet_size) {
+    bufferlist buf;
+    buf.substr_of(i->second, j, stripelet_size);
+    uint32_t new_hash = buf.crc32c(-1);
+    s_crc[p++] = new_hash;
+  }
+  ECUtil::CrcInfoDiffs::diff d;
+  d.offset = old_size;
+  d.stripelet_crc = s_crc;
+  crc_diffs.push_back(d);
+}
+void ECUtil::CrcInfo::merge(const ECUtil::CrcInfoDiffs &shard_diffs, uint32_t stripelet_size)
+{
+// Merge multiple diffs(or single diff) in to the shard_stripelet_crc vector
+  CrcInfoDiffs::diff tmp_diff;
+  uint32_t diffs_count;
+  diffs_count = shard_diffs.crc_diffs.size();
+  if (!diffs_count) {
+    dout(1) << __func__ << " DBG: Asserting, diffs_count = 0" << dendl;
+    assert(0);
+  }
+  for (uint32_t i = 0; i < diffs_count; i++) {
+  // Process the diffs in crc_diffs vector and merge it to crcinfo.stripelet_size (which goes to disk).
+    tmp_diff =  shard_diffs.crc_diffs[i];
+    if (!shard_stripelet_crc_v.size()) {
+      // No crc's found in the vector, update the new vector
+      dout(1) << "DBG: shard_stripelet_crc_v.size = " << shard_stripelet_crc_v.size() << " Appending first vector of crcs" << dendl;
+      shard_stripelet_crc_v = tmp_diff.stripelet_crc;
+    } else {
+      // There are some crcs already present, append/overwrite the vector
+      dout(1) << "DBG: shard_stripelet_crc_v.size = " << shard_stripelet_crc_v.size() << "new insert index = " << (tmp_diff.offset/stripelet_size) << dendl;
+      shard_stripelet_crc_v.insert((shard_stripelet_crc_v.begin() + tmp_diff.offset/stripelet_size), tmp_diff.stripelet_crc.begin(), tmp_diff.stripelet_crc.end());
+    }
+    //TODO: Handle error condition where offset is pointing to a value beyond what the crc count indicates
+
+    // TODO: Update total_shard_size based on stripelet_size*shard_stripelet_crc_v.size()
+    total_shard_size += tmp_diff.stripelet_crc.size() * stripelet_size;
+    dout(1) << " DBG: total_shard_size = " << total_shard_size << dendl;
+  }
+}
+
+void ECUtil::CrcInfo::encode(bufferlist &bl) const
+{
+  ENCODE_START(1, 1, bl);
+  ::encode(total_shard_size, bl);
+  ::encode(shard_stripelet_crc_v, bl);
+  ENCODE_FINISH(bl);
+}
+
+void ECUtil::CrcInfo::decode(bufferlist::iterator &bl)
+{
+  DECODE_START(1, bl);
+  ::decode(total_shard_size, bl);
+  ::decode(shard_stripelet_crc_v, bl);
+  DECODE_FINISH(bl);
+}
+
+void ECUtil::CrcInfo::dump(Formatter *f) const
+{
+}
+
+const string CINFO_KEY = "cinfo_key";
+
+bool ECUtil::is_cinfo_key_string(const string &key)
+{
+  return key == CINFO_KEY;
+}
+
+const string &ECUtil::get_cinfo_key()
+{
+  return CINFO_KEY;
 }

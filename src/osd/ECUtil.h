@@ -135,6 +135,42 @@ typedef ceph::shared_ptr<HashInfo> HashInfoRef;
 bool is_hinfo_key_string(const string &key);
 const string &get_hinfo_key();
 
+class CrcInfoDiffs;
+class CrcInfo {
+  int shard;
+  uint64_t total_shard_size;
+  vector<uint32_t> shard_stripelet_crc_v;
+
+public:
+  CrcInfo() : shard(-1),
+	      total_shard_size(0) {}
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::iterator &bl);
+  void dump(Formatter *f) const;
+  void merge(const ECUtil::CrcInfoDiffs &shard_diffs, uint32_t stripelet_size);
+  //static void generate_test_instances(list<CrcInfo*>& o);
+};
+typedef ceph::shared_ptr<CrcInfo> CrcInfoRef;
+
+class CrcInfoDiffs {
+  struct diff {
+    uint64_t offset;
+    vector<uint32_t> stripelet_crc;
+  };
+  vector<diff> crc_diffs;
+public:
+  void append_crc(uint64_t old_size,
+		  map<int, bufferlist> &to_append,
+		  uint32_t shard,
+		  uint32_t stripelet_size);
+  friend class CrcInfo;
+};
+typedef ceph::shared_ptr<vector<CrcInfoDiffs>> CrcInfoDiffsRef;
+
+bool is_cinfo_key_string(const string &key);
+const string &get_cinfo_key();
+
 }
 WRITE_CLASS_ENCODER(ECUtil::HashInfo)
+WRITE_CLASS_ENCODER(ECUtil::CrcInfo)
 #endif
