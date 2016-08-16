@@ -853,7 +853,6 @@ void ECBackend::handle_sub_write(
 	  get_parent()->whoami_shard().shard));
     }
   }
-//Arav
   ECUtil::CrcInfoRef cinfo = get_crc_info(op.soid, false);
   cinfo->merge(op.cinfo_diffs, (sinfo.get_stripe_width()/ec_impl->get_data_chunk_count()));
   bufferlist cbuf;
@@ -867,7 +866,6 @@ void ECBackend::handle_sub_write(
 		ECUtil::get_cinfo_key(),
 		cbuf); // Use omap to update the attribute
 
-//End Arav
   clear_temp_objs(op.temp_removed);
   get_parent()->log_operation(
     op.log_entries,
@@ -1407,18 +1405,20 @@ void ECBackend::submit_transaction(
 	*i,
 	ref));
 //Arav
-    ECUtil::CrcInfoDiffsRef crcdiff_ref = get_crc_info_diffs_from_registry(*i, false);
+// TODO: No need of registry for this, just use unstable_crc_info_diffs to insert a vector
+/*    ECUtil::CrcInfoDiffsRef crcdiff_ref = get_crc_info_diffs(*i, false);
     if (!crcdiff_ref) {
       derr << __func__ << ": get_crc_info_diffs_from_registry(" << *i << ")"
 	   << " returned a null pointer and there is no "
 	   << " way to recover from such an error in this "
 	   << " context" << dendl;
       assert(0);
-    }
+    }*/
+    vector<ECUtil::CrcInfoDiffs> crc_info_diffs_v(ec_impl->get_chunk_count());
     op->unstable_crc_info_diffs.insert(
       make_pair(
 	*i,
-	crcdiff_ref));
+	crc_info_diffs_v));
 //Arav-end
   }
 
@@ -1778,10 +1778,10 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
 ECUtil::CrcInfoRef ECBackend::get_crc_info(
   const hobject_t &hoid, bool checks, const map<string,bufferptr> *attrs)
 {
-  dout(10) << __func__ << " DBG: Getting attr on " << hoid << dendl;
+  dout(10) << __func__ << " Getting attr on " << hoid << dendl;
   ECUtil::CrcInfoRef cref = unstable_crcinfo_registry.lookup(hoid);
   if(!cref) {
-    dout(10) << __func__ << " DBG: not in cache " << hoid << dendl;
+    dout(10) << __func__ << " not in cache " << hoid << dendl;
     struct stat st;
     int r = store->stat(
       ch,
@@ -1790,7 +1790,7 @@ ECUtil::CrcInfoRef ECBackend::get_crc_info(
     ECUtil::CrcInfo cinfo;
     // XXX: What does it mean if there is no object on disk?
     if (r >= 0) {
-      dout(10) << __func__ << " DBG: found on disk, size " << st.st_size << dendl;
+      dout(10) << __func__ << " found on disk, size " << st.st_size << dendl;
       bufferlist bl;
       if (attrs) {
 	map<string, bufferptr>::const_iterator k = attrs->find(ECUtil::get_cinfo_key());
@@ -1820,17 +1820,19 @@ ECUtil::CrcInfoRef ECBackend::get_crc_info(
   return cref;
 }
 
-ECUtil::CrcInfoDiffsRef ECBackend::get_crc_info_diffs_from_registry(
+/*
+ECUtil::CrcInfoDiffsRef ECBackend::get_crc_info_diffs(
   const hobject_t &hoid, bool checks, const map<string,bufferptr> *attrs) {
   dout(10) << __func__ << ": Getting attr on " << hoid << dendl;
-  ECUtil::CrcInfoDiffsRef ref = unstable_crc_info_diffs_registry.lookup(hoid);
+  //ECUtil::CrcInfoDiffsRef ref = unstable_crc_info_diffs_registry.lookup(hoid);
+  ECUtil::CrcInfoDiffsRef ref;
   if (!ref) {
     dout(10) << __func__ << ": not in registry, insert to regisrty " << hoid << dendl;
     vector<ECUtil::CrcInfoDiffs> crc_info_diffs_v(ec_impl->get_chunk_count());
-    ref = unstable_crc_info_diffs_registry.lookup_or_create(hoid, crc_info_diffs_v);
+    //ref = unstable_crc_info_diffs_registry.lookup_or_create(hoid, crc_info_diffs_v);
   }
   return ref;
-}
+}*/
 // End Arav
 void ECBackend::check_op(Op *op)
 {
@@ -1895,7 +1897,8 @@ void ECBackend::start_write(Op *op) {
       get_info().stats :
       parent->get_shard_info().find(*i)->second.stats;
 
-    ECUtil::CrcInfoDiffsRef cref = op->unstable_crc_info_diffs[op->hoid]; //Arav
+    vector<ECUtil::CrcInfoDiffs> cref = op->unstable_crc_info_diffs[op->hoid]; //Arav
+    ECUtil::CrcInfoDiffs cdiffs = (cref)[i->shard];
 
     ECSubWrite sop(
       get_parent()->whoami_shard(),
@@ -1911,7 +1914,7 @@ void ECBackend::start_write(Op *op) {
       op->updated_hit_set_history,
       op->temp_added,
       op->temp_cleared,
-      ((*cref)[i->shard]));
+      cdiffs);
     if (*i == get_parent()->whoami_shard()) {
       handle_sub_write(
 	get_parent()->whoami_shard(),

@@ -17,7 +17,6 @@
 
 #include <map>
 #include <set>
-
 #include "include/memory.h"
 #include "erasure-code/ErasureCodeInterface.h"
 #include "include/buffer_fwd.h"
@@ -135,7 +134,67 @@ typedef ceph::shared_ptr<HashInfo> HashInfoRef;
 bool is_hinfo_key_string(const string &key);
 const string &get_hinfo_key();
 
-class CrcInfoDiffs;
+class CrcInfo;
+class CrcInfoDiffs {
+  struct diff {
+    uint64_t offset;
+    vector<uint32_t> stripelet_crc;
+  };
+public:
+  vector<diff> crc_diffs;
+  void append_crc(uint64_t old_size,
+		  map<int, bufferlist> &to_append,
+		  uint32_t shard,
+		  uint32_t stripelet_size);
+  void print_info(bool b) const;
+  void encode(bufferlist &bl) const
+  {
+    ENCODE_START(1, 1, bl);
+    __u32 n = crc_diffs.size();
+    ::encode(n, bl);
+    for (uint32_t i = 0; i < n; i++) {
+      ::encode(crc_diffs[i].offset, bl);
+      ::encode(crc_diffs[i].stripelet_crc, bl);
+    }
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &bl)
+  {
+    DECODE_START(1, bl);
+    __u32 n;
+    ::decode(n, bl);
+    for (uint32_t i = 0; i < n; i++) {
+      CrcInfoDiffs::diff d;
+      uint64_t ofset;
+      vector<uint32_t> s_crc;
+      ::decode(ofset, bl);
+      ::decode(s_crc, bl);
+      d.offset = ofset;
+      d.stripelet_crc.reserve(d.stripelet_crc.size() + s_crc.size());
+      d.stripelet_crc.insert(d.stripelet_crc.end(), s_crc.begin(), s_crc.end());
+      crc_diffs.insert(crc_diffs.end(), d);
+      //::decode(crc_diffs[i].offset, bl);
+      //::decode(crc_diffs[i].stripelet_crc, bl);
+    }
+    DECODE_FINISH(bl);
+  }
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<CrcInfoDiffs*>& o) {}
+  friend class CrcInfo;
+  int get_crc_diffs_count() {
+    return crc_diffs.size();
+  }
+  uint32_t get_crc_diffs_offset(int index) {
+    return crc_diffs[index].offset;
+  }
+// TODO: Temp funcs
+  void print_crc_diffs();
+};
+typedef ceph::shared_ptr<vector<CrcInfoDiffs>> CrcInfoDiffsRef;
+//class CrcInfoDiffs;
+
+
+
 class CrcInfo {
   int shard;
   uint64_t total_shard_size;
@@ -148,29 +207,16 @@ public:
   void decode(bufferlist::iterator &bl);
   void dump(Formatter *f) const;
   void merge(const ECUtil::CrcInfoDiffs &shard_diffs, uint32_t stripelet_size);
-  //static void generate_test_instances(list<CrcInfo*>& o);
+  static void generate_test_instances(list<CrcInfo*>& o){}
 };
 typedef ceph::shared_ptr<CrcInfo> CrcInfoRef;
 
-class CrcInfoDiffs {
-  struct diff {
-    uint64_t offset;
-    vector<uint32_t> stripelet_crc;
-  };
-  vector<diff> crc_diffs;
-public:
-  void append_crc(uint64_t old_size,
-		  map<int, bufferlist> &to_append,
-		  uint32_t shard,
-		  uint32_t stripelet_size);
-  friend class CrcInfo;
-};
-typedef ceph::shared_ptr<vector<CrcInfoDiffs>> CrcInfoDiffsRef;
 
 bool is_cinfo_key_string(const string &key);
 const string &get_cinfo_key();
 
 }
+WRITE_CLASS_ENCODER(ECUtil::CrcInfoDiffs)
 WRITE_CLASS_ENCODER(ECUtil::HashInfo)
 WRITE_CLASS_ENCODER(ECUtil::CrcInfo)
 #endif

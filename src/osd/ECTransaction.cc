@@ -57,7 +57,8 @@ void ECTransaction::get_append_objects(
 
 struct TransGenerator : public boost::static_visitor<void> {
   map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> &hash_infos;
-  map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs;
+  map<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> &crcinfo_diffs;
+  //map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs;
 
   ErasureCodeInterfaceRef &ecimpl;
   const pg_t pgid;
@@ -69,7 +70,8 @@ struct TransGenerator : public boost::static_visitor<void> {
   stringstream *out;
   TransGenerator(
     map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> &hash_infos,
-    map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs,
+    map<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> &crcinfo_diffs,
+    //map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs,
     ErasureCodeInterfaceRef &ecimpl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,
@@ -182,7 +184,8 @@ struct TransGenerator : public boost::static_visitor<void> {
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
 	ECUtil::get_hinfo_key(),
 	hbuf);
-      ECUtil::CrcInfoDiffs *cinfo = &((*(crcinfo_diffs[op.oid]))[i->first]);
+      ECUtil::CrcInfoDiffs *cinfo = &((crcinfo_diffs[op.oid])[i->first]);
+      //ECUtil::CrcInfoDiffs *cinfo = &((*(crcinfo_diffs[op.oid]))[i->first]);
       cinfo->append_crc(sinfo.aligned_logical_offset_to_chunk_offset(op.off),
 			buffers,
 			i->first,
@@ -286,7 +289,8 @@ struct TransGenerator : public boost::static_visitor<void> {
 
 void ECTransaction::generate_transactions(
   map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> &hash_infos,
-  map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs,
+  map<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> &crcinfo_diffs,
+  //map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs,
   ErasureCodeInterfaceRef &ecimpl,
   pg_t pgid,
   const ECUtil::stripe_info_t &sinfo,

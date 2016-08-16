@@ -11,9 +11,7 @@
  * Foundation.  See file COPYING.
  *
  */
-
 #include "ECMsgTypes.h"
-
 void ECSubWrite::encode(bufferlist &bl) const
 {
   ENCODE_START(3, 1, bl);
@@ -28,6 +26,7 @@ void ECSubWrite::encode(bufferlist &bl) const
   ::encode(log_entries, bl);
   ::encode(temp_added, bl);
   ::encode(temp_removed, bl);
+  ::encode(cinfo_diffs, bl);
   ::encode(updated_hit_set_history, bl);
   ::encode(trim_rollback_to, bl);
   ENCODE_FINISH(bl);
@@ -47,6 +46,7 @@ void ECSubWrite::decode(bufferlist::iterator &bl)
   ::decode(log_entries, bl);
   ::decode(temp_added, bl);
   ::decode(temp_removed, bl);
+  ::decode(cinfo_diffs, bl);
   if (struct_v >= 2) {
     ::decode(updated_hit_set_history, bl);
   }

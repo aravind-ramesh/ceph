@@ -200,7 +200,8 @@ public:
      set<hobject_t, hobject_t::BitwiseComparator> *out) const;
   void generate_transactions(
     map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> &hash_infos,
-    map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs,
+    map<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> &crcinfo_diffs,
+    //map<hobject_t, ECUtil::CrcInfoDiffsRef, hobject_t::BitwiseComparator> &crcinfo_diffs,
     ErasureCodeInterfaceRef &ecimpl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,

@@ -36,6 +36,7 @@ struct ECSubWrite {
   set<hobject_t, hobject_t::BitwiseComparator> temp_removed;
   boost::optional<pg_hit_set_history_t> updated_hit_set_history;
   ECUtil::CrcInfoDiffs cinfo_diffs; //Arav
+  //vector<ECUtil::CrcInfoDiffs::diff> cinfo_diffs; //Arav
   ECSubWrite() : tid(0) {}
   ECSubWrite(
     pg_shard_t from,
@@ -52,6 +53,7 @@ struct ECSubWrite {
     const set<hobject_t, hobject_t::BitwiseComparator> &temp_added,
     const set<hobject_t, hobject_t::BitwiseComparator> &temp_removed,
     ECUtil::CrcInfoDiffs cinfo_diffs)
+    //vector<ECUtil::CrcInfoDiffs::diff> cinfo_diffs)
     : from(from), tid(tid), reqid(reqid),
       soid(soid), stats(stats), t(t),
       at_version(at_version),
@@ -75,7 +77,7 @@ struct ECSubWrite {
     temp_added.swap(other.temp_added);
     temp_removed.swap(other.temp_removed);
     updated_hit_set_history = other.updated_hit_set_history;
-    cinfo_diffs = cinfo_diffs;
+    cinfo_diffs.crc_diffs = other.cinfo_diffs.crc_diffs;
   }
   void encode(bufferlist &bl) const;
   void decode(bufferlist::iterator &bl);
