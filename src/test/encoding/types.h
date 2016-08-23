@@ -95,6 +95,8 @@ TYPE(PushReplyOp)
 
 #include "osd/ECUtil.h"
 TYPE(ECUtil::HashInfo)
+TYPE(ECUtil::CrcInfo)
+TYPE(ECUtil::CrcInfoDiffs)
 
 #include "osd/ECMsgTypes.h"
 TYPE_NOCOPY(ECSubWrite)

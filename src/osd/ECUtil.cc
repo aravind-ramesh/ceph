@@ -307,6 +307,25 @@ void ECUtil::CrcInfo::merge(const CrcInfoDiffs &shard_diffs, uint32_t stripelet_
   }
 }
 
+bool ECUtil::CrcInfo::verify_stripelet_crc(uint64_t offset, int shard_id, bufferlist bl, int stripelet_size)
+{
+  dout(1) << __func__ << " DBG: for shard " << shard_id << " offset = " << offset << dendl;
+  uint64_t crc_index = offset/stripelet_size;
+  dout(1) << __func__ << " DBG :crc index " << crc_index << dendl;
+
+  for (uint32_t j = 0, i = 0; j < bl.length(); j += stripelet_size, i++) {
+    bufferlist buf;
+    buf.substr_of(bl, j, stripelet_size);
+    uint32_t new_hash = buf.crc32c(-1);
+    if (new_hash != shard_stripelet_crc_v[crc_index]) {
+      dout(1) << "DBG CRC Mismatch for shard " << shard_id << "Calculated crc = " << new_hash << "Expected crc = " << shard_stripelet_crc_v[crc_index] << dendl;
+      return false;
+    }
+    crc_index++;
+  }
+  return true;
+}
+
 void ECUtil::CrcInfo::encode(bufferlist &bl) const
 {
   ENCODE_START(1, 1, bl);

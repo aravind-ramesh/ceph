@@ -866,6 +866,57 @@ void ECBackend::handle_sub_write(
 		ECUtil::get_cinfo_key(),
 		cbuf); // Use omap to update the attribute
 
+// Add omap with default size 4K, i.e. 1024 crcs in one omap(since 1 crc is 4 bytes).
+  dout(1) << __func__ << " DBG : len of cbuf: " << cbuf.length() << dendl;
+  dout(1) << " DBG: chopping cbuf in to 4K size bufs " << dendl;
+
+  #define crc_omap_default_size 4096
+
+  map<string,bufferlist> to_set;
+// Handle case where length < 4096
+  if (cbuf.length() < crc_omap_default_size) {
+    dout(1) << " DBG: cbuf len greater than def size" << dendl;
+    to_set[stringify(op.soid)] = cbuf;
+  } else {
+    // Case length > 4096
+    uint32_t count = cbuf.length()/crc_omap_default_size;
+    uint32_t lastchunk_size = 0;
+    if (cbuf.length() % crc_omap_default_size) {
+      // Not aligned to crc_omap_default_size boundary.
+      lastchunk_size = cbuf.length() - (count * crc_omap_default_size);
+    }
+    dout(1) << "DBG : count = " << count << " lastchunk_size = " << lastchunk_size << dendl;
+    // buf length greater than default size
+    uint32_t k = 0;
+    uint32_t j = 0;
+    for (j = 0; j < count; j++) {
+      bufferlist bl;
+      bl.substr_of(cbuf, k, crc_omap_default_size);
+      k = k + crc_omap_default_size;
+      string s = stringify(op.soid);
+      s.append(stringify(j));
+      dout(1) << "DBG: stringified string = " << s << dendl;
+      to_set[s] = bl;
+    }
+    if (lastchunk_size) {
+      bufferlist b;
+      b.substr_of(cbuf, k, lastchunk_size);
+      string s = stringify(op.soid);
+      s.append(stringify(j));
+      dout(1) << "DBG: last stringified string = " << s << dendl;
+      to_set[s] = b;
+    }
+  }
+  dout(1) << " DBG : writing omap " << dendl;
+  op.t.omap_setkeys(coll,
+		      ghobject_t(op.soid,
+			ghobject_t::NO_GEN,
+			get_parent()->whoami_shard().shard),
+		    to_set);
+
+
+// ----------------------------------------------------------------------------
+
   clear_temp_objs(op.temp_removed);
   get_parent()->log_operation(
     op.log_entries,
@@ -911,6 +962,14 @@ void ECBackend::handle_sub_read(
       i != op.to_read.end();
       ++i) {
     int r = 0;
+    // Arav
+    ECUtil::CrcInfoRef cinfo = get_crc_info(i->first);
+    if (!cinfo) {
+      r = -EIO;
+      get_parent()->clog_error() << __func__ << ": No crc_info for" << i->first << "\n";
+      dout(5) << __func__ << ": No crc_info for " << i->first << dendl;
+      //goto error;
+    }
     ECUtil::HashInfoRef hinfo = get_hash_info(i->first);
     if (!hinfo) {
       r = -EIO;
@@ -918,9 +977,11 @@ void ECBackend::handle_sub_read(
       dout(5) << __func__ << ": No hinfo for " << i->first << dendl;
       goto error;
     }
+
     for (list<boost::tuple<uint64_t, uint64_t, uint32_t> >::iterator j =
 	   i->second.begin(); j != i->second.end(); ++j) {
       bufferlist bl;
+      dout(1) << __func__ << "DBG: get(0) " << j->get<0>() << "get (1) " << j->get<1>() << "get(2) " << j->get<2>() << dendl; // Arav
       r = store->read(
 	ch,
 	ghobject_t(i->first, ghobject_t::NO_GEN, shard),
@@ -962,6 +1023,12 @@ void ECBackend::handle_sub_read(
 	  r = -EIO;
 	  goto error;
 	}
+      }
+      int stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+      if (!cinfo->verify_stripelet_crc(j->get<0>(), shard, bl, stripelet_size)) {
+	  dout(1) << __func__ << " DBG : verify_stripelet_crc failed " << dendl;
+	  r = -EIO;
+	  goto error;
       }
     }
     continue;
@@ -1792,6 +1859,7 @@ ECUtil::CrcInfoRef ECBackend::get_crc_info(
     if (r >= 0) {
       dout(10) << __func__ << " found on disk, size " << st.st_size << dendl;
       bufferlist bl;
+      map<string,bufferlist> o_kv;
       if (attrs) {
 	map<string, bufferptr>::const_iterator k = attrs->find(ECUtil::get_cinfo_key());
 	if (k == attrs->end()) {
@@ -1800,14 +1868,33 @@ ECUtil::CrcInfoRef ECBackend::get_crc_info(
 	  bl.push_back(k->second);
 	}
       } else {
-	r = store->getattr(
+	/*r = store->getattr(
 	  ch,
 	  ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
 	  ECUtil::get_cinfo_key(),
 	  bl);
+	  if (r < 0) {
+	    dout(5) << __func__ << ": getattr failed: " << cpp_strerror(r) << dendl;
+	    bl.clear(); // just in case
+	  }
+ */
+
+
+	bufferlist b; // header
+	r = store->omap_get(
+	  ch,
+	  ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+	  &b,
+	  &o_kv);
 	if (r < 0) {
-	  dout(5) << __func__ << ": getattr failed: " << cpp_strerror(r) << dendl;
-	  bl.clear(); // just in case
+	  dout(5) << __func__ << ": DBG omap_get failed: " << cpp_strerror(r) << dendl;
+	}
+	for (map<string,bufferlist>::iterator iter = o_kv.begin();
+	      iter != o_kv.end();
+	      ++iter) {
+	  dout(1) << " DBG: o_kv iterator buf len " << iter->second.length() << " key = " << iter->first << dendl;
+	  bl.append(iter->second);
+	  dout(1) << " DBG: buf len after append " << bl.length() << dendl;
 	}
       }
       if (bl.length() > 0) {

@@ -207,6 +207,8 @@ public:
   void decode(bufferlist::iterator &bl);
   void dump(Formatter *f) const;
   void merge(const ECUtil::CrcInfoDiffs &shard_diffs, uint32_t stripelet_size);
+  bool verify_stripelet_crc(uint64_t offset, 
+			    int shard_id, bufferlist bl, int stripelet_size);
   static void generate_test_instances(list<CrcInfo*>& o){}
 };
 typedef ceph::shared_ptr<CrcInfo> CrcInfoRef;
