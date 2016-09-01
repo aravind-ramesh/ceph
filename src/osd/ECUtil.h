@@ -199,6 +199,7 @@ class CrcInfo {
   int shard;
   uint64_t total_shard_size;
   vector<uint32_t> shard_stripelet_crc_v;
+  vector<vector<uint32_t>> omap_aligned_crc;
 
 public:
   CrcInfo() : shard(-1),
@@ -206,7 +207,9 @@ public:
   void encode(bufferlist &bl) const;
   void decode(bufferlist::iterator &bl);
   void dump(Formatter *f) const;
-  void merge(const ECUtil::CrcInfoDiffs &shard_diffs, uint32_t stripelet_size);
+  void merge(const ECUtil::CrcInfoDiffs &shard_diffs,
+	     uint32_t stripelet_size);
+  void update_crc(vector<uint32_t> crc_v);
   bool verify_stripelet_crc(uint64_t offset, 
 			    int shard_id, bufferlist bl, int stripelet_size);
   static void generate_test_instances(list<CrcInfo*>& o){}

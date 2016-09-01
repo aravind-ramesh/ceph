@@ -88,6 +88,9 @@ public:
   void on_flushed();
 
   void dump_recovery_info(Formatter *f) const;
+  void create_omap_key(const hobject_t &hoid, string &key, uint64_t offset, uint32_t k);
+  void set_crc_omap(ECUtil::CrcInfoDiffs cinfo_diffs, ObjectStore::Transaction t,
+			const hobject_t &soid);
 
   /// @see osd/ECTransaction.cc/h
   PGTransaction *get_transaction();
@@ -459,14 +462,8 @@ public:
   SharedPtrRegistry<hobject_t, ECUtil::HashInfo, hobject_t::BitwiseComparator> unstable_hashinfo_registry;
   ECUtil::HashInfoRef get_hash_info(const hobject_t &hoid, bool checks = true,
 				    const map<string,bufferptr> *attr = NULL);
-//Arav
-  SharedPtrRegistry<hobject_t, ECUtil::CrcInfo, hobject_t::BitwiseComparator> unstable_crcinfo_registry;
-  ECUtil::CrcInfoRef get_crc_info(const hobject_t &hoid, bool checks = true,
-				    const map<string,bufferptr> *attr = NULL);
-
-//  SharedPtrRegistry<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> unstable_crc_info_diffs_registry;
-//  ECUtil::CrcInfoDiffsRef get_crc_info_diffs(const hobject_t &hoid, bool checks = true,
-//				    const map<string,bufferptr> *attr = NULL);
+  SharedPtrRegistry<std::string, ECUtil::CrcInfo> unstable_crcinfo_registry;
+  ECUtil::CrcInfoRef get_crc_omap_info(const hobject_t &hoid, const std::string &key, uint64_t offset);
 
   friend struct ReadCB;
   void check_op(Op *op);

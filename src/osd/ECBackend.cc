@@ -824,6 +824,58 @@ void ECBackend::sub_write_applied(
   }
 }
 
+#define crc_omap_default_size 4096
+void ECBackend::create_omap_key(const hobject_t &hoid, string &key, uint64_t offset, uint32_t k)
+{
+  key = stringify(hoid);
+  key.append("_");
+  key.append(stringify(offset));
+  key.append("_");
+  key.append(stringify(k));
+}
+void ECBackend::set_crc_omap(ECUtil::CrcInfoDiffs cinfo_diffs, ObjectStore::Transaction t,
+	 			  const hobject_t &soid)
+{
+  uint32_t crcs_per_omap = crc_omap_default_size/sizeof(uint32_t); // Number of crcs per vector.
+  for (uint32_t i = 0; i < cinfo_diffs.crc_diffs.size(); ++i) {
+    //uint32_t count_bufs = cinfo_diffs.crc_diffs[i].stripelet_crc.size()/crcs_per_omap;
+    uint32_t crc_count = cinfo_diffs.crc_diffs[i].stripelet_crc.size();
+    uint32_t count_bufs = (crc_count % crcs_per_omap) ? (crc_count/crcs_per_omap + 1) : crc_count/crcs_per_omap;
+    map<string,bufferlist> to_set;
+    ECUtil::CrcInfoRef cinfo;
+    string crc_key;
+    for (uint32_t k = 0; k < count_bufs; k++) {
+      vector<uint32_t> omap_size_aligned_crc_v;
+      uint32_t to = 0;
+      // Handle scenarios where number of crcs in the vector is not exactly aligned to crcs_per_omap
+      if ((cinfo_diffs.crc_diffs[i].stripelet_crc.size() - (k * crcs_per_omap)) < crcs_per_omap) {
+	to = cinfo_diffs.crc_diffs[i].stripelet_crc.size() - (k * crcs_per_omap);
+      } else {
+	to += crcs_per_omap;
+      }
+      omap_size_aligned_crc_v.insert(omap_size_aligned_crc_v.begin(),
+				    cinfo_diffs.crc_diffs[i].stripelet_crc.begin() + (k * crcs_per_omap),
+				    cinfo_diffs.crc_diffs[i].stripelet_crc.begin() + (k * crcs_per_omap) + to);
+      uint32_t stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+      // Since the decimal value is ignored, we end up with the omap size aligned offset boundary.
+      uint64_t key_offset = (cinfo_diffs.crc_diffs[i].offset/(crcs_per_omap * stripelet_size)) * (crcs_per_omap * stripelet_size); 
+      create_omap_key(soid, crc_key, key_offset, k);
+      dout(1) << __func__ << "DBG : getting omap for key " << crc_key << dendl;
+      cinfo = get_crc_omap_info(soid, crc_key, cinfo_diffs.crc_diffs[i].offset);
+      cinfo->update_crc(omap_size_aligned_crc_v);
+      bufferlist cbuf;
+      ::encode(*cinfo, cbuf);
+      dout(1) << __func__ << " DBG : len of cbuf: " << cbuf.length() << dendl;
+      to_set[crc_key] = cbuf;
+    }
+  t.omap_setkeys(coll,
+                      ghobject_t(soid,
+                        ghobject_t::NO_GEN,
+                        get_parent()->whoami_shard().shard),
+                    to_set);
+  }
+}
+
 void ECBackend::handle_sub_write(
   pg_shard_t from,
   OpRequestRef msg,
@@ -853,69 +905,45 @@ void ECBackend::handle_sub_write(
 	  get_parent()->whoami_shard().shard));
     }
   }
-  ECUtil::CrcInfoRef cinfo = get_crc_info(op.soid, false);
-  cinfo->merge(op.cinfo_diffs, (sinfo.get_stripe_width()/ec_impl->get_data_chunk_count()));
-  bufferlist cbuf;
-  ::encode(*cinfo,
-	    cbuf);
-  op.t.setattr(coll,
-		ghobject_t(
-		  op.soid,
-		  ghobject_t::NO_GEN,
-		  get_parent()->whoami_shard().shard),
-		ECUtil::get_cinfo_key(),
-		cbuf); // Use omap to update the attribute
+  //set_crc_omap(op.cinfo_diffs, op.t, op.soid);
 
-// Add omap with default size 4K, i.e. 1024 crcs in one omap(since 1 crc is 4 bytes).
-  dout(1) << __func__ << " DBG : len of cbuf: " << cbuf.length() << dendl;
-  dout(1) << " DBG: chopping cbuf in to 4K size bufs " << dendl;
-
-  #define crc_omap_default_size 4096
-
-  map<string,bufferlist> to_set;
-// Handle case where length < 4096
-  if (cbuf.length() < crc_omap_default_size) {
-    dout(1) << " DBG: cbuf len greater than def size" << dendl;
-    to_set[stringify(op.soid)] = cbuf;
-  } else {
-    // Case length > 4096
-    uint32_t count = cbuf.length()/crc_omap_default_size;
-    uint32_t lastchunk_size = 0;
-    if (cbuf.length() % crc_omap_default_size) {
-      // Not aligned to crc_omap_default_size boundary.
-      lastchunk_size = cbuf.length() - (count * crc_omap_default_size);
+  for (uint32_t i = 0; i < op.cinfo_diffs.crc_diffs.size(); ++i) {
+    uint32_t crcs_per_omap = crc_omap_default_size/sizeof(uint32_t); // Number of crcs per vector.
+    uint32_t crc_count = op.cinfo_diffs.crc_diffs[i].stripelet_crc.size();
+    uint32_t count_bufs = (crc_count % crcs_per_omap) ? (crc_count/crcs_per_omap + 1) : crc_count/crcs_per_omap;
+    map<string,bufferlist> to_set;
+    ECUtil::CrcInfoRef cinfo;
+    string crc_key;
+    for (uint32_t k = 0; k <= count_bufs; k++) {
+      vector<uint32_t> omap_size_aligned_crc_v;
+      uint32_t to = 0;
+      // Handle scenarios where number of crcs in the vector is not exactly aligned to crcs_per_omap
+      if ((op.cinfo_diffs.crc_diffs[i].stripelet_crc.size() - (k * crcs_per_omap)) < crcs_per_omap) {
+	to = op.cinfo_diffs.crc_diffs[i].stripelet_crc.size() - (k * crcs_per_omap);
+      } else {
+	to += crcs_per_omap;
+      }
+      omap_size_aligned_crc_v.insert(omap_size_aligned_crc_v.begin(),
+				    op.cinfo_diffs.crc_diffs[i].stripelet_crc.begin() + (k * crcs_per_omap),
+				    op.cinfo_diffs.crc_diffs[i].stripelet_crc.begin() + (k * crcs_per_omap) + to);
+      uint32_t stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+      // Since the decimal value is ignored, we end up with the omap size aligned offset boundary.
+      uint64_t key_offset = (op.cinfo_diffs.crc_diffs[i].offset/(crcs_per_omap * stripelet_size)) * (crcs_per_omap * stripelet_size); 
+      create_omap_key(op.soid, crc_key, key_offset, k);
+      dout(1) << __func__ << "DBG : getting omap for key " << crc_key << dendl;
+      cinfo = get_crc_omap_info(op.soid, crc_key, op.cinfo_diffs.crc_diffs[i].offset);
+      cinfo->update_crc(omap_size_aligned_crc_v);
+      bufferlist cbuf;
+      ::encode(*cinfo, cbuf);
+      dout(1) << __func__ << " DBG : len of cbuf: " << cbuf.length() << dendl;
+      to_set[crc_key] = cbuf;
     }
-    dout(1) << "DBG : count = " << count << " lastchunk_size = " << lastchunk_size << dendl;
-    // buf length greater than default size
-    uint32_t k = 0;
-    uint32_t j = 0;
-    for (j = 0; j < count; j++) {
-      bufferlist bl;
-      bl.substr_of(cbuf, k, crc_omap_default_size);
-      k = k + crc_omap_default_size;
-      string s = stringify(op.soid);
-      s.append(stringify(j));
-      dout(1) << "DBG: stringified string = " << s << dendl;
-      to_set[s] = bl;
-    }
-    if (lastchunk_size) {
-      bufferlist b;
-      b.substr_of(cbuf, k, lastchunk_size);
-      string s = stringify(op.soid);
-      s.append(stringify(j));
-      dout(1) << "DBG: last stringified string = " << s << dendl;
-      to_set[s] = b;
-    }
-  }
-  dout(1) << " DBG : writing omap " << dendl;
   op.t.omap_setkeys(coll,
-		      ghobject_t(op.soid,
-			ghobject_t::NO_GEN,
-			get_parent()->whoami_shard().shard),
-		    to_set);
-
-
-// ----------------------------------------------------------------------------
+                      ghobject_t(op.soid,
+                        ghobject_t::NO_GEN,
+                        get_parent()->whoami_shard().shard),
+                    to_set);
+  }
 
   clear_temp_objs(op.temp_removed);
   get_parent()->log_operation(
@@ -962,14 +990,6 @@ void ECBackend::handle_sub_read(
       i != op.to_read.end();
       ++i) {
     int r = 0;
-    // Arav
-    ECUtil::CrcInfoRef cinfo = get_crc_info(i->first);
-    if (!cinfo) {
-      r = -EIO;
-      get_parent()->clog_error() << __func__ << ": No crc_info for" << i->first << "\n";
-      dout(5) << __func__ << ": No crc_info for " << i->first << dendl;
-      //goto error;
-    }
     ECUtil::HashInfoRef hinfo = get_hash_info(i->first);
     if (!hinfo) {
       r = -EIO;
@@ -1024,11 +1044,33 @@ void ECBackend::handle_sub_read(
 	  goto error;
 	}
       }
-      int stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
-      if (!cinfo->verify_stripelet_crc(j->get<0>(), shard, bl, stripelet_size)) {
-	  dout(1) << __func__ << " DBG : verify_stripelet_crc failed " << dendl;
-	  r = -EIO;
-	  goto error;
+      //Arav
+      uint64_t offset = j->get<0>();
+      uint64_t length = j->get<1>();
+      dout(1) << __func__ << " DBG : offset = " << offset << " len = " << length << dendl;
+      uint32_t stripelet_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+      uint32_t crc_count = length/stripelet_size;
+      uint32_t max_crc_per_omap = crc_omap_default_size/sizeof(uint32_t);
+      uint32_t omap_count = crc_count % max_crc_per_omap ? (crc_count/max_crc_per_omap + 1) : crc_count/max_crc_per_omap;
+      ECUtil::CrcInfoRef cinfo;
+      for (uint32_t k = 0; k < omap_count; k++) {
+	// read the omaps for the specific read request
+	// since keys are created at boundary of max_crc_per_omap*stripelet_size, figure out key name
+	// Since the decimal is ignored, we end up with the correct offset boundary.
+	uint64_t key_offset = (j->get<0>() / (max_crc_per_omap * stripelet_size)) * (max_crc_per_omap * stripelet_size);
+	string crc_key = stringify(i->first);
+	crc_key.append("_");
+	crc_key.append(stringify(key_offset));
+	crc_key.append("_");
+	crc_key.append(stringify(k));
+	dout(1) << __func__ << "DBG : getting omap for key " << crc_key << dendl;
+	cinfo = get_crc_omap_info(i->first, crc_key, j->get<0>());
+	offset = k * stripelet_size * max_crc_per_omap; // To track where to compare the hash in bl data
+	if (!cinfo->verify_stripelet_crc(offset, shard, bl, stripelet_size)) {
+	    dout(1) << __func__ << " DBG : verify_stripelet_crc failed " << dendl;
+	    r = -EIO;
+	    goto error;
+	}
       }
     }
     continue;
@@ -1471,22 +1513,11 @@ void ECBackend::submit_transaction(
       make_pair(
 	*i,
 	ref));
-//Arav
-// TODO: No need of registry for this, just use unstable_crc_info_diffs to insert a vector
-/*    ECUtil::CrcInfoDiffsRef crcdiff_ref = get_crc_info_diffs(*i, false);
-    if (!crcdiff_ref) {
-      derr << __func__ << ": get_crc_info_diffs_from_registry(" << *i << ")"
-	   << " returned a null pointer and there is no "
-	   << " way to recover from such an error in this "
-	   << " context" << dendl;
-      assert(0);
-    }*/
     vector<ECUtil::CrcInfoDiffs> crc_info_diffs_v(ec_impl->get_chunk_count());
     op->unstable_crc_info_diffs.insert(
       make_pair(
 	*i,
 	crc_info_diffs_v));
-//Arav-end
   }
 
   for (vector<pg_log_entry_t>::iterator i = op->log_entries.begin();
@@ -1841,86 +1872,55 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
   return ref;
 }
 
-// Arav
-ECUtil::CrcInfoRef ECBackend::get_crc_info(
-  const hobject_t &hoid, bool checks, const map<string,bufferptr> *attrs)
+ECUtil::CrcInfoRef ECBackend::get_crc_omap_info(
+  const hobject_t &hoid, const std::string &key, uint64_t offset)
 {
-  dout(10) << __func__ << " Getting attr on " << hoid << dendl;
-  ECUtil::CrcInfoRef cref = unstable_crcinfo_registry.lookup(hoid);
+  dout(10) << __func__ << " DBG Getting attr on " << hoid << dendl;
+  ECUtil::CrcInfoRef cref = unstable_crcinfo_registry.lookup(key);
   if(!cref) {
-    dout(10) << __func__ << " not in cache " << hoid << dendl;
+    dout(10) << __func__ << " DBG not in cache " << hoid << dendl;
     struct stat st;
     int r = store->stat(
-      ch,
-      ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-      &st);
+	      ch,
+	      ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+	      &st);
     ECUtil::CrcInfo cinfo;
-    // XXX: What does it mean if there is no object on disk?
     if (r >= 0) {
-      dout(10) << __func__ << " found on disk, size " << st.st_size << dendl;
+      dout(10) << __func__ << " DBG found on disk, size " << st.st_size << dendl;
       bufferlist bl;
       map<string,bufferlist> o_kv;
-      if (attrs) {
-	map<string, bufferptr>::const_iterator k = attrs->find(ECUtil::get_cinfo_key());
-	if (k == attrs->end()) {
-	  dout(5) << __func__ << " " << hoid << " missing hinfo attr" << dendl;
-	} else {
-	  bl.push_back(k->second);
+      set<string> keys;
+      keys.insert(key);
+      /*uint32_t crc_per_vector = crc_omap_default_size/sizeof(uint32_t);
+      for (uint32_t k = 0; k < count_bufs; k++) {
+	string s = stringify(hoid);
+	s.append("_");
+	s.append(stringify(offset));
+	s.append("_");
+	s.append(stringify(k));
+	keys.insert(s);	
+      }*/
+      r = store->omap_get_values(ch,
+				  ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+				  keys,
+				  &o_kv);
+      for (map<string, bufferlist>::iterator iter = o_kv.begin();
+	    iter != o_kv.end();
+	    ++iter) {
+	dout(1) << " DBG: o_kv iterator buf len " << iter->second.length() << " key = " << iter->first << dendl;
+	bl = iter->second;
+	if (bl.length() > 0) {
+	  bufferlist::iterator bp = bl.begin();
+	  ::decode(cinfo, bp);
 	}
-      } else {
-	/*r = store->getattr(
-	  ch,
-	  ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-	  ECUtil::get_cinfo_key(),
-	  bl);
-	  if (r < 0) {
-	    dout(5) << __func__ << ": getattr failed: " << cpp_strerror(r) << dendl;
-	    bl.clear(); // just in case
-	  }
- */
-
-
-	bufferlist b; // header
-	r = store->omap_get(
-	  ch,
-	  ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
-	  &b,
-	  &o_kv);
-	if (r < 0) {
-	  dout(5) << __func__ << ": DBG omap_get failed: " << cpp_strerror(r) << dendl;
-	}
-	for (map<string,bufferlist>::iterator iter = o_kv.begin();
-	      iter != o_kv.end();
-	      ++iter) {
-	  dout(1) << " DBG: o_kv iterator buf len " << iter->second.length() << " key = " << iter->first << dendl;
-	  bl.append(iter->second);
-	  dout(1) << " DBG: buf len after append " << bl.length() << dendl;
-	}
-      }
-      if (bl.length() > 0) {
-	bufferlist::iterator bp = bl.begin();
-	::decode(cinfo, bp);
       }
     }
-    cref = unstable_crcinfo_registry.lookup_or_create(hoid, cinfo);
+    cref = unstable_crcinfo_registry.lookup_or_create(key, cinfo);
   }
   return cref;
+  //TODO : Delete this line. Add get_crc_omap_info to the header file. handle func update_crc properly for cache hit case 
+  // 	   i.e. multiple offset updations.
 }
-
-/*
-ECUtil::CrcInfoDiffsRef ECBackend::get_crc_info_diffs(
-  const hobject_t &hoid, bool checks, const map<string,bufferptr> *attrs) {
-  dout(10) << __func__ << ": Getting attr on " << hoid << dendl;
-  //ECUtil::CrcInfoDiffsRef ref = unstable_crc_info_diffs_registry.lookup(hoid);
-  ECUtil::CrcInfoDiffsRef ref;
-  if (!ref) {
-    dout(10) << __func__ << ": not in registry, insert to regisrty " << hoid << dendl;
-    vector<ECUtil::CrcInfoDiffs> crc_info_diffs_v(ec_impl->get_chunk_count());
-    //ref = unstable_crc_info_diffs_registry.lookup_or_create(hoid, crc_info_diffs_v);
-  }
-  return ref;
-}*/
-// End Arav
 void ECBackend::check_op(Op *op)
 {
   if (op->pending_apply.empty() && op->on_all_applied) {
@@ -2306,3 +2306,4 @@ void ECBackend::be_deep_scrub(
   o.omap_digest = seed;
   o.omap_digest_present = true;
 }
+

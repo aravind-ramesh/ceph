@@ -279,6 +279,7 @@ void ECUtil::CrcInfoDiffs::dump(Formatter *f) const
   f->close_section();
 }
 
+
 void ECUtil::CrcInfo::merge(const CrcInfoDiffs &shard_diffs, uint32_t stripelet_size)
 {
   // Merge multiple diffs(or single diff) in to the shard_stripelet_crc vector
@@ -305,19 +306,24 @@ void ECUtil::CrcInfo::merge(const CrcInfoDiffs &shard_diffs, uint32_t stripelet_
     // TODO: Update total_shard_size based on stripelet_size*shard_stripelet_crc_v.size()
     total_shard_size += tmp_diff.stripelet_crc.size() * stripelet_size;
   }
+} 
+void ECUtil::CrcInfo::update_crc(vector<uint32_t> crc_v)
+{
+  dout(1) << __func__ << " DBG : size of crc_v = " << crc_v.size() << dendl;
+  shard_stripelet_crc_v = crc_v;
 }
 
 bool ECUtil::CrcInfo::verify_stripelet_crc(uint64_t offset, int shard_id, bufferlist bl, int stripelet_size)
 {
   dout(1) << __func__ << " DBG: for shard " << shard_id << " offset = " << offset << dendl;
-  uint64_t crc_index = offset/stripelet_size;
-  dout(1) << __func__ << " DBG :crc index " << crc_index << dendl;
+  uint64_t crc_index = 0;
 
-  for (uint32_t j = 0, i = 0; j < bl.length(); j += stripelet_size, i++) {
+  for (uint32_t j = offset; j < bl.length(); j += stripelet_size) {
     bufferlist buf;
     buf.substr_of(bl, j, stripelet_size);
     uint32_t new_hash = buf.crc32c(-1);
     if (new_hash != shard_stripelet_crc_v[crc_index]) {
+      dout(1) << __func__ << " DBG :crc index " << crc_index << dendl;
       dout(1) << "DBG CRC Mismatch for shard " << shard_id << "Calculated crc = " << new_hash << "Expected crc = " << shard_stripelet_crc_v[crc_index] << dendl;
       return false;
     }
@@ -325,11 +331,10 @@ bool ECUtil::CrcInfo::verify_stripelet_crc(uint64_t offset, int shard_id, buffer
   }
   return true;
 }
-
 void ECUtil::CrcInfo::encode(bufferlist &bl) const
 {
   ENCODE_START(1, 1, bl);
-  ::encode(total_shard_size, bl);
+  //::encode(total_shard_size, bl);
   ::encode(shard_stripelet_crc_v, bl);
   ENCODE_FINISH(bl);
 }
@@ -337,7 +342,7 @@ void ECUtil::CrcInfo::encode(bufferlist &bl) const
 void ECUtil::CrcInfo::decode(bufferlist::iterator &bl)
 {
   DECODE_START(1, bl);
-  ::decode(total_shard_size, bl);
+  //::decode(total_shard_size, bl);
   ::decode(shard_stripelet_crc_v, bl);
   DECODE_FINISH(bl);
 }
