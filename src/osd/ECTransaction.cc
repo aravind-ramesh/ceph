@@ -57,6 +57,7 @@ void ECTransaction::get_append_objects(
 
 struct TransGenerator : public boost::static_visitor<void> {
   map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> &hash_infos;
+  map<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> &crcinfo_diffs;
 
   ErasureCodeInterfaceRef &ecimpl;
   const pg_t pgid;
@@ -68,6 +69,7 @@ struct TransGenerator : public boost::static_visitor<void> {
   stringstream *out;
   TransGenerator(
     map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> &hash_infos,
+    map<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> &crcinfo_diffs,
     ErasureCodeInterfaceRef &ecimpl,
     pg_t pgid,
     const ECUtil::stripe_info_t &sinfo,
@@ -76,6 +78,7 @@ struct TransGenerator : public boost::static_visitor<void> {
     set<hobject_t, hobject_t::BitwiseComparator> *temp_removed,
     stringstream *out)
     : hash_infos(hash_infos),
+      crcinfo_diffs(crcinfo_diffs),
       ecimpl(ecimpl), pgid(pgid),
       sinfo(sinfo),
       trans(trans),
@@ -179,6 +182,10 @@ struct TransGenerator : public boost::static_visitor<void> {
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
 	ECUtil::get_hinfo_key(),
 	hbuf);
+      ECUtil::CrcInfoDiffs *cinfo = &((crcinfo_diffs[op.oid])[i->first]);
+      cinfo->append_crc(sinfo.aligned_logical_offset_to_chunk_offset(op.off),
+			buffers[i->first],
+			sinfo.get_stripe_width()/ecimpl->get_data_chunk_count());
     }
   }
   void operator()(const ECTransaction::CloneOp &op) {
@@ -229,6 +236,8 @@ struct TransGenerator : public boost::static_visitor<void> {
     for (map<shard_id_t, ObjectStore::Transaction>::iterator i = trans->begin();
 	 i != trans->end();
 	 ++i) {
+      i->second.omap_clear(get_coll_ct(i->first, op.oid),
+	      ghobject_t(op.oid, ghobject_t::NO_GEN, i->first));
       i->second.remove(
 	get_coll_rm(i->first, op.oid),
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first));
@@ -278,6 +287,7 @@ struct TransGenerator : public boost::static_visitor<void> {
 
 void ECTransaction::generate_transactions(
   map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> &hash_infos,
+  map<hobject_t, vector<ECUtil::CrcInfoDiffs>, hobject_t::BitwiseComparator> &crcinfo_diffs,
   ErasureCodeInterfaceRef &ecimpl,
   pg_t pgid,
   const ECUtil::stripe_info_t &sinfo,
@@ -288,6 +298,7 @@ void ECTransaction::generate_transactions(
 {
   TransGenerator gen(
     hash_infos,
+    crcinfo_diffs,
     ecimpl,
     pgid,
     sinfo,

@@ -55,7 +55,7 @@ public:
   friend struct SubWriteApplied;
   friend struct SubWriteCommitted;
   void sub_write_applied(
-    ceph_tid_t tid, eversion_t version);
+    ceph_tid_t tid, eversion_t version, ECUtil::CrcInfoRef cinfo);
   void sub_write_committed(
     ceph_tid_t tid, eversion_t version, eversion_t last_complete);
   void handle_sub_write(
@@ -88,6 +88,14 @@ public:
   void on_flushed();
 
   void dump_recovery_info(Formatter *f) const;
+  void set_crc_omap(ECUtil::CrcInfoDiffs cinfo_diffs,
+                                  const hobject_t &soid,
+                                  map<string,bufferlist> &to_set,
+				  ECUtil::CrcInfoRef &cinfo);
+  int get_crc_and_verify(const hobject_t &soid,
+			  const bufferlist &bl,
+			  uint64_t offset,
+			  uint64_t length);
 
   /// @see osd/ECTransaction.cc/h
   PGTransaction *get_transaction();
@@ -368,6 +376,8 @@ public:
     set<pg_shard_t> pending_apply;
 
     map<hobject_t, ECUtil::HashInfoRef, hobject_t::BitwiseComparator> unstable_hash_infos;
+    map<hobject_t, vector<ECUtil::CrcInfoDiffs>,
+		  hobject_t::BitwiseComparator> unstable_crc_info_diffs;
     ~Op() {
       delete on_local_applied_sync;
       delete on_all_applied;
@@ -457,7 +467,22 @@ public:
   SharedPtrRegistry<hobject_t, ECUtil::HashInfo, hobject_t::BitwiseComparator> unstable_hashinfo_registry;
   ECUtil::HashInfoRef get_hash_info(const hobject_t &hoid, bool checks = true,
 				    const map<string,bufferptr> *attr = NULL);
+  struct PairComparator {
+    bool operator()(const pair<hobject_t, uint64_t> &lhs, const pair<hobject_t, uint64_t> &rhs) {
+      int r = cmp_bitwise(lhs.first, rhs.first);
+      if (r < 0)
+	return true;
+      else if (r > 0)
+	return false;
+      else
+	return lhs.second < rhs.second;
+    }
+  };
 
+  SharedPtrRegistry<pair<hobject_t, uint64_t>,
+		ECUtil::CrcInfo, PairComparator> unstable_crcinfo_registry;
+  ECUtil::CrcInfoRef get_crc_omap_info(const hobject_t &hoid,
+  			    pair<hobject_t, uint64_t> &p, std::string &key);
   friend struct ReadCB;
   void check_op(Op *op);
   void start_write(Op *op);

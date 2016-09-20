@@ -135,6 +135,77 @@ typedef ceph::shared_ptr<HashInfo> HashInfoRef;
 bool is_hinfo_key_string(const string &key);
 const string &get_hinfo_key();
 
+class CrcInfo;
+class CrcInfoDiffs {
+  struct diff {
+    uint64_t offset;
+    vector<uint32_t> stripelet_crc;
+  };
+public:
+  vector<diff> crc_diffs;
+  void append_crc(uint64_t old_size,
+		  bufferlist &bl,
+		  uint32_t stripelet_size);
+  void encode(bufferlist &bl) const
+  {
+    ENCODE_START(1, 1, bl);
+    __u32 n = crc_diffs.size();
+    ::encode(n, bl);
+    for (uint32_t i = 0; i < n; i++) {
+      ::encode(crc_diffs[i].offset, bl);
+      ::encode(crc_diffs[i].stripelet_crc, bl);
+    }
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &bl)
+  {
+    DECODE_START(1, bl);
+    __u32 n;
+    ::decode(n, bl);
+    for (uint32_t i = 0; i < n; i++) {
+      CrcInfoDiffs::diff d;
+      uint64_t offset;
+      vector<uint32_t> s_crc;
+      ::decode(offset, bl);
+      ::decode(s_crc, bl);
+      d.offset = offset;
+      d.stripelet_crc.reserve(d.stripelet_crc.size() + s_crc.size());
+      d.stripelet_crc.insert(d.stripelet_crc.end(), s_crc.begin(), s_crc.end());
+      crc_diffs.insert(crc_diffs.end(), d);
+    }
+    DECODE_FINISH(bl);
+  }
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<CrcInfoDiffs*>& o) {}
+  int get_crc_diffs_count() {
+    return crc_diffs.size();
+  }
+  uint32_t get_crc_diffs_offset(int index) {
+    return crc_diffs[index].offset;
+  }
+};
+typedef ceph::shared_ptr<vector<CrcInfoDiffs>> CrcInfoDiffsRef;
+
+class CrcInfo {
+  vector<uint32_t> shard_stripelet_crc_v;
+public:
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::iterator &bl);
+  void dump(Formatter *f) const;
+  void update_crc(vector<uint32_t> crc_v, uint32_t crc_insert_index);
+  bool verify_stripelet_crc(uint64_t offset, 
+			    bufferlist bl, uint32_t stripelet_size,
+			    uint32_t crc_index, uint32_t crcs_to_verify);
+  static void generate_test_instances(list<CrcInfo*>& o){}
+};
+typedef ceph::shared_ptr<CrcInfo> CrcInfoRef;
+
+
+bool is_cinfo_key_string(const string &key);
+const string &get_cinfo_key();
+
 }
+WRITE_CLASS_ENCODER(ECUtil::CrcInfoDiffs)
 WRITE_CLASS_ENCODER(ECUtil::HashInfo)
+WRITE_CLASS_ENCODER(ECUtil::CrcInfo)
 #endif

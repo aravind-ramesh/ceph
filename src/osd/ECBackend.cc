@@ -788,20 +788,22 @@ struct SubWriteApplied : public Context {
   OpRequestRef msg;
   ceph_tid_t tid;
   eversion_t version;
+  ECUtil::CrcInfoRef cinfo;
   SubWriteApplied(
     ECBackend *pg,
     OpRequestRef msg,
     ceph_tid_t tid,
-    eversion_t version)
-    : pg(pg), msg(msg), tid(tid), version(version) {}
+    eversion_t version,
+    ECUtil::CrcInfoRef cinfo)
+    : pg(pg), msg(msg), tid(tid), version(version), cinfo(cinfo) {}
   void finish(int) {
     if (msg)
       msg->mark_event("sub_op_applied");
-    pg->sub_write_applied(tid, version);
+    pg->sub_write_applied(tid, version, cinfo);
   }
 };
 void ECBackend::sub_write_applied(
-  ceph_tid_t tid, eversion_t version) {
+  ceph_tid_t tid, eversion_t version, ECUtil::CrcInfoRef cinfo) {
   parent->op_applied(version);
   if (get_parent()->pgb_is_primary()) {
     ECSubWriteReply reply;
@@ -824,6 +826,63 @@ void ECBackend::sub_write_applied(
   }
 }
 
+//#define crc_omap_default_size 4096
+//#define crc_omap_default_size 2048
+#define crc_omap_default_size 16384
+
+void ECBackend::set_crc_omap(ECUtil::CrcInfoDiffs cinfo_diffs,
+	 			  const hobject_t &soid,
+				  map<string,bufferlist> &to_set,
+				  ECUtil::CrcInfoRef &cinfo)
+{
+  uint32_t crcs_per_omap = crc_omap_default_size/sizeof(uint32_t);
+  uint32_t s_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+  uint64_t max_data_per_omap = crcs_per_omap * s_size;
+
+  for (uint32_t i = 0; i < cinfo_diffs.crc_diffs.size(); ++i) {
+
+    uint64_t data_offset = cinfo_diffs.crc_diffs[i].offset;
+    uint32_t crc_count = cinfo_diffs.crc_diffs[i].stripelet_crc.size();
+    uint32_t to = 0;
+    dout(25) << __func__ << " DBG : data_offset " << data_offset
+			<< " crcs_per_omap " << crcs_per_omap
+			<< " max_data_per_omap " << max_data_per_omap
+			<< " crc_count " << crc_count << dendl;
+    uint32_t appended_crcs = 0;
+    while (crc_count != appended_crcs) {
+      uint64_t omap_offset = (data_offset/max_data_per_omap) *
+					      (max_data_per_omap);
+      dout(1) << __func__ << " DBG omap_offset " << omap_offset << dendl;
+      uint32_t m_crc_to_append = (max_data_per_omap -
+				  (data_offset - omap_offset))/s_size;
+      uint32_t crc_to_append = ((crc_count - appended_crcs) > m_crc_to_append)
+				? m_crc_to_append : (crc_count - appended_crcs);
+      uint32_t crc_idx = (data_offset - omap_offset)/s_size;
+      vector<uint32_t> omap_size_aligned_crc_v;
+      omap_size_aligned_crc_v.insert(omap_size_aligned_crc_v.begin(),
+	cinfo_diffs.crc_diffs[i].stripelet_crc.begin() + to,
+	cinfo_diffs.crc_diffs[i].stripelet_crc.begin() + to + crc_to_append);
+      to += crc_to_append;
+
+      string crc_key = stringify(omap_offset);
+      pair<hobject_t, uint64_t> p;
+      p = make_pair(soid, omap_offset);
+      cinfo = get_crc_omap_info(soid, p, crc_key);
+      cinfo->update_crc(omap_size_aligned_crc_v, crc_idx);
+      bufferlist cbuf;
+      ::encode(*cinfo, cbuf);
+      to_set[crc_key] = cbuf;
+      data_offset = data_offset + (crc_to_append * s_size);
+      appended_crcs += crc_to_append;
+
+      dout(25) << " DBG: crc_to_append " << crc_to_append << " crc_idx "
+	      << crc_idx << " to " << to << " crc_key "
+	      << crc_key << " appended_crcs " << appended_crcs << dendl;
+      dout(25) << " DBG: crc_count " << crc_count << "omap_size_ali_crc_v.size "
+	      << omap_size_aligned_crc_v.size() << dendl;
+    }
+  }
+}
 void ECBackend::handle_sub_write(
   pg_shard_t from,
   OpRequestRef msg,
@@ -853,6 +912,15 @@ void ECBackend::handle_sub_write(
 	  get_parent()->whoami_shard().shard));
     }
   }
+
+  map<string,bufferlist> to_set;
+  ECUtil::CrcInfoRef cinfo;
+  set_crc_omap(op.cinfo_diffs, op.soid, to_set, cinfo);
+  op.t.omap_setkeys(coll,
+                    ghobject_t(op.soid,
+                    ghobject_t::NO_GEN,
+                    get_parent()->whoami_shard().shard),
+                    to_set);
   clear_temp_objs(op.temp_removed);
   get_parent()->log_operation(
     op.log_entries,
@@ -879,12 +947,58 @@ void ECBackend::handle_sub_write(
 	get_parent()->get_info().last_complete)));
   localt.register_on_applied(
     get_parent()->bless_context(
-      new SubWriteApplied(this, msg, op.tid, op.at_version)));
+      new SubWriteApplied(this, msg, op.tid, op.at_version, cinfo)));
   vector<ObjectStore::Transaction> tls;
   tls.reserve(2);
   tls.push_back(std::move(localt));
   tls.push_back(std::move(op.t));
   get_parent()->queue_transactions(tls, msg);
+}
+
+int ECBackend::get_crc_and_verify(const hobject_t &soid,
+				  const bufferlist &bl,
+				  uint64_t d_offset,
+				  uint64_t length)
+{
+  dout(1) << __func__ << " DBG : data offset = " << d_offset << " len = "
+							  << length << dendl;
+  int r =0;
+
+  uint32_t crcs_per_omap = crc_omap_default_size/sizeof(uint32_t);
+  uint32_t s_size = sinfo.get_stripe_width()/ec_impl->get_data_chunk_count();
+  uint64_t max_data_per_omap = crcs_per_omap * s_size;
+  uint64_t data_offset = d_offset;
+  uint32_t crc_count = length/s_size;
+  uint32_t crcs_verified = 0;
+  dout(1) << __func__ << " DBG crcs_per_omap: " << crcs_per_omap <<
+	  " s_size " << s_size << " max_data_per_omap " <<
+	  max_data_per_omap << " data_offset " << data_offset <<
+	  " crc_count " << crc_count << dendl;
+  while (crc_count != crcs_verified) {
+    uint64_t omap_offset = (data_offset/max_data_per_omap)*(max_data_per_omap);
+    string crc_key = stringify(omap_offset);
+    pair<hobject_t, uint64_t> p;
+    p = make_pair(soid, omap_offset);
+    ECUtil::CrcInfoRef cinfo;
+    cinfo = get_crc_omap_info(soid, p, crc_key);
+
+    uint32_t crc_index = (data_offset - omap_offset)/s_size;
+    uint32_t max_crc_to_verify = (max_data_per_omap -
+				 (data_offset - omap_offset))/s_size;
+    uint32_t crcs_to_verify = ((crc_count - crcs_verified) > max_crc_to_verify)
+				    ? max_crc_to_verify :
+				    (crc_count - crcs_verified);
+    uint64_t bl_offset = crcs_verified * s_size; 
+
+    if (!cinfo->verify_stripelet_crc(bl_offset, bl, s_size,
+					      crc_index, crcs_to_verify)) {
+	dout(1) << __func__ << " DBG : verify_stripelet_crc failed " << dendl;
+	r = -EIO;
+    }	
+    crcs_verified += crcs_to_verify;
+    data_offset += (crcs_to_verify * s_size);
+  }
+  return r;
 }
 
 void ECBackend::handle_sub_read(
@@ -949,6 +1063,11 @@ void ECBackend::handle_sub_read(
 	  r = -EIO;
 	  goto error;
 	}
+      }
+
+      r = get_crc_and_verify(i->first, bl, j->get<0>(), j->get<1>());
+      if (r == -EIO) {
+	goto error;
       }
     }
     continue;
@@ -1391,6 +1510,11 @@ void ECBackend::submit_transaction(
       make_pair(
 	*i,
 	ref));
+    vector<ECUtil::CrcInfoDiffs> crc_info_diffs_v(ec_impl->get_chunk_count());
+    op->unstable_crc_info_diffs.insert(
+      make_pair(
+	*i,
+	crc_info_diffs_v));
   }
 
   for (vector<pg_log_entry_t>::iterator i = op->log_entries.begin();
@@ -1744,6 +1868,47 @@ ECUtil::HashInfoRef ECBackend::get_hash_info(
   }
   return ref;
 }
+ECUtil::CrcInfoRef ECBackend::get_crc_omap_info(
+  const hobject_t &hoid, pair<hobject_t, uint64_t> &p, string &key)
+{
+  dout(10) << __func__ << " Getting attr on " << hoid << dendl;
+  ECUtil::CrcInfoRef cref = unstable_crcinfo_registry.lookup(p);
+  if(!cref) {
+    dout(10) << __func__ << " DBG not in cache " << hoid << dendl;
+    struct stat st;
+    int r = store->stat(
+	      ch,
+	      ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+	      &st);
+    ECUtil::CrcInfo cinfo;
+    if (r >= 0) {
+      dout(10) << __func__ << " DBG object found on disk, size= " << st.st_size << dendl;
+      bufferlist bl;
+      map<string,bufferlist> o_kv;
+      set<string> keys;
+      keys.insert(key);
+      r = store->omap_get_values(ch,
+				  ghobject_t(hoid, ghobject_t::NO_GEN, get_parent()->whoami_shard().shard),
+				  keys,
+				  &o_kv);
+      for (map<string, bufferlist>::iterator iter = o_kv.begin();
+	    iter != o_kv.end();
+	    ++iter) {
+	bl = iter->second;
+	if (bl.length() > 0) {
+	  bufferlist::iterator bp = bl.begin();
+	  ::decode(cinfo, bp);
+	}
+      }
+    }
+    cref = unstable_crcinfo_registry.lookup_or_create(p, cinfo);
+  } else {
+    dout(1) << " DBG1 cache hit" << dendl;
+  }
+  return cref;
+}
+
+
 
 void ECBackend::check_op(Op *op)
 {
@@ -1783,6 +1948,7 @@ void ECBackend::start_write(Op *op) {
 
   op->t->generate_transactions(
     op->unstable_hash_infos,
+    op->unstable_crc_info_diffs,
     ec_impl,
     get_parent()->get_info().pgid.pgid,
     sinfo,
@@ -1807,6 +1973,9 @@ void ECBackend::start_write(Op *op) {
       get_info().stats :
       parent->get_shard_info().find(*i)->second.stats;
 
+    vector<ECUtil::CrcInfoDiffs> cref = op->unstable_crc_info_diffs[op->hoid];
+    ECUtil::CrcInfoDiffs cdiffs = (cref)[i->shard];
+
     ECSubWrite sop(
       get_parent()->whoami_shard(),
       op->tid,
@@ -1820,7 +1989,8 @@ void ECBackend::start_write(Op *op) {
       op->log_entries,
       op->updated_hit_set_history,
       op->temp_added,
-      op->temp_cleared);
+      op->temp_cleared,
+      cdiffs);
     if (*i == get_parent()->whoami_shard()) {
       handle_sub_write(
 	get_parent()->whoami_shard(),
@@ -2082,6 +2252,8 @@ void ECBackend::be_deep_scrub(
     }
     pos += r;
     h << bl;
+
+    r = get_crc_and_verify(poid, bl, pos, stride);
     if ((unsigned)r < stride)
       break;
   }
