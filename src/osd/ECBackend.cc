@@ -1065,9 +1065,11 @@ void ECBackend::handle_sub_read(
 	}
       }
 
-      r = get_crc_and_verify(i->first, bl, j->get<0>(), j->get<1>());
-      if (r == -EIO) {
-	goto error;
+      if (g_conf->osd_ec_verify_stripelet_crc) {
+	r = get_crc_and_verify(i->first, bl, j->get<0>(), j->get<1>());
+	if (r == -EIO) {
+	  goto error;
+	}
       }
     }
     continue;
@@ -2253,7 +2255,11 @@ void ECBackend::be_deep_scrub(
     pos += r;
     h << bl;
 
-    r = get_crc_and_verify(poid, bl, pos, stride);
+    if (g_conf->osd_ec_verify_stripelet_crc) {
+      r = get_crc_and_verify(poid, bl, pos, stride);
+      if (r == -EIO)
+	    break;
+    }
     if ((unsigned)r < stride)
       break;
   }

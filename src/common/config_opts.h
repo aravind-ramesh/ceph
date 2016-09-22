@@ -1462,3 +1462,4 @@ OPTION(throttler_perf_counter, OPT_BOOL, true) // enable/disable throttler perf 
 OPTION(internal_safe_to_start_threads, OPT_BOOL, false)
 
 OPTION(debug_deliberately_leak_memory, OPT_BOOL, false)
+OPTION(osd_ec_verify_stripelet_crc, OPT_BOOL, false)
