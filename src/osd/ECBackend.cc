@@ -1066,8 +1066,8 @@ void ECBackend::handle_sub_read(
       }
 
       if (g_conf->osd_ec_verify_stripelet_crc) {
-	dout(1) << __func__ << "config true, verifying crc " << dendl;
 	r = get_crc_and_verify(i->first, bl, j->get<0>(), j->get<1>());
+	dout(1) << __func__ << "verifying crc failed" << dendl;
 	if (r == -EIO) {
 	  goto error;
 	}
