@@ -1066,6 +1066,7 @@ void ECBackend::handle_sub_read(
       }
 
       if (g_conf->osd_ec_verify_stripelet_crc) {
+	dout(1) << __func__ << "config true, verifying crc " << dendl;
 	r = get_crc_and_verify(i->first, bl, j->get<0>(), j->get<1>());
 	if (r == -EIO) {
 	  goto error;
@@ -2252,14 +2253,18 @@ void ECBackend::be_deep_scrub(
       r = -EIO;
       break;
     }
+
+    if (g_conf->osd_ec_verify_stripelet_crc) {
+      int ret = get_crc_and_verify(poid, bl, pos, stride);
+      if (ret == -EIO) {
+	dout(1) << __func__ << "verifying crc failed" << dendl;
+	r = ret;
+	break;
+      }
+    }
     pos += r;
     h << bl;
 
-    if (g_conf->osd_ec_verify_stripelet_crc) {
-      r = get_crc_and_verify(poid, bl, pos, stride);
-      if (r == -EIO)
-	    break;
-    }
     if ((unsigned)r < stride)
       break;
   }
