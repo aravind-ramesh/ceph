@@ -1293,6 +1293,8 @@ public:
 
   pool_opts_t opts; ///< options
 
+  uint32_t crc_omap_size;	///< max crcs each omap entry can accomodate (each crc is 4 bytes)
+
 private:
   vector<uint32_t> grade_table;
 
@@ -1341,7 +1343,8 @@ public:
       stripe_width(0),
       expected_num_objects(0),
       fast_read(false),
-      opts()
+      opts(),
+      crc_omap_size(0)
   { }
 
   void dump(Formatter *f) const;
@@ -1384,6 +1387,8 @@ public:
 
   void set_stripe_width(uint32_t s) { stripe_width = s; }
   uint32_t get_stripe_width() const { return stripe_width; }
+
+  uint32_t get_crc_omap_size() const { return crc_omap_size; }
 
   bool is_replicated()   const { return get_type() == TYPE_REPLICATED; }
   bool is_erasure() const { return get_type() == TYPE_ERASURE; }

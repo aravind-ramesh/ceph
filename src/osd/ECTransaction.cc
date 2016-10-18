@@ -182,10 +182,12 @@ struct TransGenerator : public boost::static_visitor<void> {
 	ghobject_t(op.oid, ghobject_t::NO_GEN, i->first),
 	ECUtil::get_hinfo_key(),
 	hbuf);
-      ECUtil::CrcInfoDiffs *cinfo = &((crcinfo_diffs[op.oid])[i->first]);
-      cinfo->append_crc(sinfo.aligned_logical_offset_to_chunk_offset(op.off),
-			buffers[i->first],
-			sinfo.get_stripe_width()/ecimpl->get_data_chunk_count());
+      if (g_conf->osd_ec_verify_stripelet_crc) {
+	ECUtil::CrcInfoDiffs *cinfo = &((crcinfo_diffs[op.oid])[i->first]);
+	cinfo->append_crc(sinfo.aligned_logical_offset_to_chunk_offset(op.off),
+			  buffers[i->first],
+			  sinfo.get_stripe_width()/ecimpl->get_data_chunk_count());
+      }
     }
   }
   void operator()(const ECTransaction::CloneOp &op) {

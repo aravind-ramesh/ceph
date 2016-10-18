@@ -411,6 +411,7 @@ public:
   CephContext *cct;
   ErasureCodeInterfaceRef ec_impl;
 
+  uint32_t crc_omap_size;
 
   /**
    * ECRecPred
@@ -494,7 +495,8 @@ public:
     ObjectStore *store,
     CephContext *cct,
     ErasureCodeInterfaceRef ec_impl,
-    uint64_t stripe_width);
+    uint64_t stripe_width,
+    uint32_t crc_omap_size);
 
   /// Returns to_read replicas sufficient to reconstruct want
   int get_min_avail_to_read_shards(

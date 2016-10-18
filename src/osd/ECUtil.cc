@@ -224,7 +224,7 @@ void ECUtil::CrcInfoDiffs::append_crc(uint64_t old_size,
                                       uint32_t stripelet_size)
 {
 
-  dout(1) << __func__ << " stripelet_size: " << stripelet_size << dendl;
+  dout(1) << __func__ << " old_size: " << old_size << dendl;
   uint32_t p = 0;
   vector<uint32_t> s_crc(bl.length()/stripelet_size, -1);
   for (uint32_t j = 0; j < bl.length(); j += stripelet_size) {
@@ -257,20 +257,20 @@ void ECUtil::CrcInfoDiffs::dump(Formatter *f) const
 void ECUtil::CrcInfo::update_crc(vector<uint32_t> crc_v,
                                  uint32_t crc_insert_index)
 {
-  dout(25) << __func__ << " DBG : size of crc_v = " << crc_v.size() <<
+  dout(20) << __func__ << " size of crc_v = " << crc_v.size() <<
                 " crc_insert_index " << crc_insert_index <<
                 " shard_stripelet_crc_v.size() " << shard_stripelet_crc_v.size()
                 << dendl;
   if ((crc_insert_index + crc_v.size()) <= shard_stripelet_crc_v.size()) {
     copy(crc_v.begin(), crc_v.end(), (shard_stripelet_crc_v.begin() +
                                               crc_insert_index));
-    dout(25) << " DBG shard_stripelet_crc_v.size() "
+    dout(20) << " shard_stripelet_crc_v.size() "
 			    << shard_stripelet_crc_v.size() << dendl;
   } else {
     shard_stripelet_crc_v.resize(crc_insert_index + crc_v.size());
     copy(crc_v.begin(), crc_v.end(), (shard_stripelet_crc_v.begin() +
                                               crc_insert_index));
-    dout(25) << " DBG ow/append - shard_stripelet_crc_v.size() "
+    dout(20) << " ow/append - shard_stripelet_crc_v.size() "
 			  << shard_stripelet_crc_v.size() << dendl;
   }
 }
@@ -287,7 +287,7 @@ bool ECUtil::CrcInfo::verify_stripelet_crc(uint64_t offset, bufferlist bl,
     buf.substr_of(bl, j, stripelet_size);
     uint32_t new_hash = buf.crc32c(-1);
     if (new_hash != shard_stripelet_crc_v[crc_index]) {
-      dout(1) << "DBG CRC Mismatch" << "Calculated crc= " << new_hash
+      dout(1) << __func__ << "CRC Mismatch" << "Calculated crc= " << new_hash
         << "Expected crc = " << shard_stripelet_crc_v[crc_index] << dendl;
       return false;
     }

@@ -3716,6 +3716,7 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
 	    break;
 	  case ERASURE_CODE_PROFILE:
 	    f->dump_string("erasure_code_profile", p->erasure_code_profile);
+	    f->dump_unsigned("crc_omap_size", p->crc_omap_size);
 	    break;
 	  case MIN_READ_RECENCY_FOR_PROMOTE:
 	    f->dump_int("min_read_recency_for_promote",
@@ -3834,6 +3835,7 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
 	    break;
 	  case ERASURE_CODE_PROFILE:
 	    ss << "erasure_code_profile: " << p->erasure_code_profile << "\n";
+	    ss << "crc_omap_size: " << p->crc_omap_size << "\n";
 	    break;
 	  case MIN_READ_RECENCY_FOR_PROMOTE:
 	    ss << "min_read_recency_for_promote: " <<
@@ -4443,6 +4445,49 @@ int OSDMonitor::get_erasure_code(const string &erasure_code_profile,
 			  profile, erasure_code, ss);
 }
 
+int OSDMonitor::get_omap_size_from_ec_profile(const string &erasure_code_profile,
+					      uint32_t *omap_size,
+					      ostream *ss)
+{
+  ErasureCodeProfile profile =
+    osdmap.get_erasure_code_profile(erasure_code_profile);
+  ErasureCodeProfile::const_iterator omap_size_itr = profile.find("omap_size");
+  if (omap_size_itr == profile.end()) {
+    // Not specified by the user, using default size
+    *omap_size = DEFAULT_OMAP_SIZE;
+    return 0;
+  }
+  try
+  {
+    *omap_size = std::stoul(omap_size_itr->second, 0, 10);
+  }
+  catch( std::invalid_argument e )
+  {
+    *ss << "Error: Invalid argument provided for omap_size"
+	<< " in erasure code profile." << std::endl;
+    return -EINVAL;
+  }
+  catch ( std::out_of_range  e )
+  {
+    *ss << "Error: Out of range value provided for omap_size"
+	<< "in erasure code profile." << std::endl;
+    return -EINVAL;
+  }
+  if (*omap_size > (DEFAULT_OMAP_SIZE * 1024)) {
+    *ss << "Error: omap_size in erasure code profile is"
+	<< " exceeding the max limit of " << (DEFAULT_OMAP_SIZE * 1024)
+	<< "." << std::endl;
+    return -EINVAL;
+  }
+  if (*omap_size % 1024) {
+    *ss << "Error: omap_size is set to " << *omap_size
+	<< " in erasure code profile. But it should be a multiple of 1024."
+	<< std::endl;
+    return -EINVAL;
+  }
+  return 0;
+}
+
 int OSDMonitor::check_cluster_features(uint64_t features,
 				       stringstream &ss)
 {
@@ -4794,6 +4839,14 @@ int OSDMonitor::prepare_new_pool(string& name, uint64_t auid,
     dout(10) << " prepare_pool_stripe_width returns " << r << dendl;
     return r;
   }
+
+  uint32_t omap_size = 0;
+  r = get_omap_size_from_ec_profile(erasure_code_profile,
+				    &omap_size, ss);
+  if (r) {
+    dout(10) << "get_omap_size_from_ec_profile returns " << r << dendl;
+    return r;
+  }
   
   bool fread = false;
   if (pool_type == pg_pool_t::TYPE_ERASURE) {
@@ -4861,6 +4914,7 @@ int OSDMonitor::prepare_new_pool(string& name, uint64_t auid,
     g_conf->osd_pool_default_cache_target_full_ratio * 1000000;
   pi->cache_min_flush_age = g_conf->osd_pool_default_cache_min_flush_age;
   pi->cache_min_evict_age = g_conf->osd_pool_default_cache_min_evict_age;
+  pi->crc_omap_size = omap_size;
   pending_inc.new_pool_names[pool] = name;
   return 0;
 }

@@ -341,7 +341,8 @@ PGBackend *PGBackend::build_pg_backend(
       store,
       cct,
       ec_impl,
-      pool.stripe_width);
+      pool.stripe_width,
+      pool.crc_omap_size);
   }
   default:
     assert(0);

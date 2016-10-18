@@ -42,6 +42,7 @@ class MOSDMap;
 #include "mon/MonOpRequest.h"
 
 #define OSD_METADATA_PREFIX "osd_metadata"
+#define DEFAULT_OMAP_SIZE 4096
 
 /// information about a particular peer's failure reports for one osd
 struct failure_reporter_t {
@@ -330,6 +331,9 @@ private:
 
   void _pool_op_reply(MonOpRequestRef op,
                       int ret, epoch_t epoch, bufferlist *blp=NULL);
+  int get_omap_size_from_ec_profile(const string &erasure_code_profile,
+				    uint32_t *omap_size,
+				    ostream *ss);
 
   struct C_Booted : public C_MonOp {
     OSDMonitor *cmon;
